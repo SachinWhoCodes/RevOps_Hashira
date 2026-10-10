@@ -1,0 +1,30 @@
+# Which source properties mean what. Defaults match HubSpot standard properties plus the three
+# custom properties in docs/runbooks/sandbox-setup.md. Phase 2 adds an admin screen to edit this
+# per company (stored as a versioned config row).
+hubspot:
+  company:
+    seats_purchased: seats_purchased   # Number
+    renewal_date: renewal_date         # Date; if absent, the open renewal deal's close date is used
+    arr: null                          # null = derive from renewal deal amounts
+  contact:
+    role_property: hs_buying_role
+    role_values:
+      CHAMPION: champion
+      BUDGET_HOLDER: economic_buyer
+      DECISION_MAKER: economic_buyer
+      END_USER: user
+      INFLUENCER: user
+    status_property: employment_status
+    status_values:
+      left: left
+      active: active
+  deal:
+    type_property: dealtype
+    type_values:
+      existingbusiness: renewal
+      newbusiness: new
+    won_stages: [closedwon]
+    lost_stages: [closedlost]
+    next_step_property: hs_next_step
+    next_step_date_property: null
+  engagement_types: [notes, tasks, calls]   # meetings/emails come from Calendar and Gmail

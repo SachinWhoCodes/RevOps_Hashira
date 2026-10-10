@@ -1,0 +1,3 @@
+# pnpm blocks dependency install scripts unless allowed. esbuild (used by Vite) needs its script.
+allowBuilds:
+  esbuild: true

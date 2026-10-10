@@ -1,0 +1,10 @@
+# Keep the image small and free of local state: the venv is rebuilt inside the image.
+.venv/
+**/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+tests/
+.env
+.env.*

@@ -1,0 +1,178 @@
+"""Word lists for the synthetic company. All domains use the reserved .test TLD (RFC 2606)."""
+
+VENDOR_NAME = "Lumora"
+VENDOR_DOMAIN = "lumora.test"
+PRODUCT = "Lumora"
+
+OWNERS = [
+    ("Priya", "Sharma"),
+    ("Arjun", "Mehta"),
+    ("Neha", "Iyer"),
+    ("Rahul", "Verma"),
+    ("Sara", "Thomas"),
+    ("Vikram", "Rao"),
+]
+
+COMPANY_PREFIXES = [
+    "Brightpath",
+    "Cobalt",
+    "Northstar",
+    "Bluefin",
+    "Granite",
+    "Silverline",
+    "Redwood",
+    "Kestrel",
+    "Lattice",
+    "Meridian",
+    "Orchid",
+    "Pinnacle",
+    "Quartz",
+    "Riverstone",
+    "Sapphire",
+    "Tidewater",
+    "Umbra",
+    "Vantage",
+    "Willow",
+    "Zenith",
+    "Aurora",
+    "Beacon",
+    "Cedar",
+    "Driftwood",
+    "Ember",
+    "Falcon",
+    "Harbor",
+    "Ironwood",
+    "Juniper",
+    "Keystone",
+    "Lumen",
+    "Maple",
+    "Nimbus",
+    "Onyx",
+    "Pioneer",
+    "Radiant",
+    "Summit",
+    "Trident",
+    "Uplift",
+    "Verde",
+    "Wavelength",
+    "Yellowstone",
+    "Atlas",
+    "Banyan",
+    "Copperleaf",
+    "Delta",
+    "Evergreen",
+    "Fieldstone",
+    "Goldcrest",
+    "Highland",
+]
+
+COMPANY_SUFFIXES = [
+    "Logistics",
+    "Health",
+    "Labs",
+    "Foods",
+    "Systems",
+    "Retail",
+    "Finance",
+    "Energy",
+    "Travel",
+    "Media",
+    "Analytics",
+    "Pharma",
+    "Mobility",
+    "Education",
+    "Insurance",
+    "Realty",
+    "Textiles",
+    "Networks",
+    "Robotics",
+    "Hospitality",
+]
+
+FIRST_NAMES = [
+    "Aarav",
+    "Ananya",
+    "Rohan",
+    "Ishita",
+    "Kabir",
+    "Meera",
+    "Dev",
+    "Tara",
+    "Nikhil",
+    "Pooja",
+    "Siddharth",
+    "Kavya",
+    "Aditya",
+    "Riya",
+    "Karan",
+    "Divya",
+    "Manish",
+    "Sneha",
+    "Varun",
+    "Lakshmi",
+    "James",
+    "Emma",
+    "Lucas",
+    "Olivia",
+    "Noah",
+    "Sofia",
+    "Daniel",
+    "Grace",
+    "Omar",
+    "Leila",
+    "Chen",
+    "Mei",
+    "Hiro",
+    "Yuki",
+    "Mateo",
+    "Camila",
+    "Tomas",
+    "Elena",
+    "Kofi",
+    "Amara",
+]
+
+LAST_NAMES = [
+    "Kapoor",
+    "Nair",
+    "Reddy",
+    "Gupta",
+    "Joshi",
+    "Menon",
+    "Bose",
+    "Pillai",
+    "Desai",
+    "Chopra",
+    "Malhotra",
+    "Banerjee",
+    "Kulkarni",
+    "Shetty",
+    "Agarwal",
+    "Fernandes",
+    "Smith",
+    "Garcia",
+    "Mueller",
+    "Rossi",
+    "Tanaka",
+    "Kim",
+    "Okafor",
+    "Haddad",
+    "Silva",
+    "Novak",
+    "Lindqvist",
+    "Dubois",
+]
+
+DEPARTMENTS = ["Sales", "Operations", "Finance", "Marketing", "Support", "Product", "HR", "Engineering"]
+
+FEATURES = ["dashboards", "alerts", "the forecasting module", "API exports", "SSO", "scheduled reports"]
+
+COMPETITORS = ["Quantly", "Metricly", "Datawise"]
+
+CHAMPION_TITLES = ["Head of Operations", "Analytics Lead", "Director of RevOps", "Ops Manager", "BI Lead"]
+BUYER_TITLES = ["VP Operations", "CFO", "COO", "VP Finance", "Head of Strategy"]
+USER_TITLES = ["Analyst", "Sales Ops Specialist", "Data Analyst", "Operations Associate", "Team Lead"]
+
+PERSONAL_DOMAINS = ["gmail.com", "yahoo.com", "outlook.com"]
+
+RESELLER = ("Partnerworks", "partnerworks.test")

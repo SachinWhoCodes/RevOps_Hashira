@@ -1,0 +1,82 @@
+# Casefile — what must never reach GitHub.
+# Rule of thumb: commit source, config templates, lockfiles, migrations, docs and tests.
+# Never commit secrets, customer data, generated data, build output or machine-specific files.
+
+# ---------------------------------------------------------------- secrets and credentials
+# Real env files hold read/write tokens and the dev admin password. Only the template is shared.
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+# OAuth client / service-account downloads (e.g. from Google Cloud console)
+client_secret*.json
+credentials.json
+*-credentials.json
+service-account*.json
+token.json
+
+# ---------------------------------------------------------------- customer and generated data
+# Real company data must never be committed (plan: "no customer data in code repositories").
+# Synthetic data is reproducible from a seed with `make synth`, so it is not committed either.
+data/*
+!data/.gitkeep
+exports/
+backups/
+*.dump
+*.sql.gz
+# Mailbox exports (Gmail fallback route in the plan) contain personal data.
+*.mbox
+*.pst
+# Evaluation outputs are regenerated; hand-labelled REAL emails stay local.
+evals/results/*
+!evals/results/.gitkeep
+evals/datasets/real/
+evals/datasets/private/
+
+# ---------------------------------------------------------------- Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# ---------------------------------------------------------------- Node / frontend
+node_modules/
+dist/
+.vite/
+.eslintcache
+*.tsbuildinfo
+.pnpm-store/
+coverage/
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# ---------------------------------------------------------------- logs and local tooling
+*.log
+logs/
+# Claude Code local config (launch.json has machine-specific absolute paths)
+.claude/
+
+# ---------------------------------------------------------------- OS and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
