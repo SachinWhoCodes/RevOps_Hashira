@@ -1,0 +1,41 @@
+# Points model v1 — STARTING VALUES from the blueprint (section 9), to be tuned by the back-test.
+# Bump `version` on any change; every assessment records the version it was scored with.
+version: 3
+
+risk_points:            # each firing signal adds these points to risk (0–100)
+  champion_departure: 30
+  usage_decline: 25
+  champion_silence: 20
+  meeting_gap: 15
+  negative_tone: 15       # v3
+  missing_next_step: 10
+positive_points:        # subtracted from risk
+  executive_engagement: 10
+opportunity_points:     # opportunity score (0–100), scored separately from risk
+  seat_saturation: 30     # v2: one opportunity signal alone no longer opens a case (alert fatigue)
+  new_team_adoption: 30
+  upgrade_interest: 30    # v3
+
+# Urgency multiplies priority by how soon the renewal is (first matching row wins).
+urgency:
+  - {max_days: 30, factor: 1.0}
+  - {max_days: 60, factor: 0.8}
+  - {max_days: 90, factor: 0.6}
+  - {max_days: 180, factor: 0.35}
+  - {max_days: 100000, factor: 0.2}
+urgency_unknown: 0.3    # renewal date unknown
+urgency_overdue: 1.0    # renewal date passed, deal still open
+
+# Data coverage → confidence. A score built on fewer sources is shown as lower confidence.
+confidence_sources: [crm, email, calendar, usage]
+confidence_levels:      # minimum number of sources present for each level
+  high: 4
+  medium: 3
+
+cases:
+  open_risk_at: 40          # open a risk case at or above this risk score
+  close_risk_below: 30      # auto-resolve below this (gap avoids open/close flapping)
+  open_opportunity_at: 40
+  close_opportunity_below: 30
+  # No expansion case while the account is at risk: fix the relationship before selling more.
+  suppress_expansion_when_risk_at: 40

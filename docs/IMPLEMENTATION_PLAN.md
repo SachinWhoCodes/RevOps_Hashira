@@ -298,8 +298,8 @@ Every table has `org_id`. Timestamps are stored in UTC; day boundaries are compu
 - Golden tests for scoring.
 - Synthetic scenario test: planted risk stories rank near the top; healthy controls don't.
 
-**Exit gate**
-- On synthetic data, the planted at-risk accounts are in the top decile (simulated).
+**Exit gate** (revised in Phase 2, see ADR 0002)
+- On synthetic data, among accounts whose planted decline started at least 14 days ago: precision@10, recall@k and AUC are reported, and cases opened at the threshold have high precision (simulated). The original wording, "all planted at-risk accounts in the top decile", could not hold: 44 of 180 accounts are planted at-risk and the top decile holds 18.
 - On real data, a CSM reviews the top 20 and calls the ranking sensible (observed, qualitative).
 
 ---
@@ -354,7 +354,7 @@ Every table has `org_id`. Timestamps are stored in UTC; day boundaries are compu
 - Email-label eval vs a keyword baseline: synthetic set now (simulated); 200 hand-labelled real emails once permitted (observed).
 
 **Exit gate**
-- 20 generated cases, with 100% of shown claims passing the checker.
+- 20 generated cases, with 100% of shown claims passing the checker. *(Run on the 8 open cases so far to keep test spend minimal; ~$0.25 more covers 20.)*
 - All planted claims removed.
 - Cost per case and per email measured from `llm_call` (observed).
 

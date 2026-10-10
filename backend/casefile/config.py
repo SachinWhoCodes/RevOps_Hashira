@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     read_usage_dsn: SecretStr | None = None
 
     anthropic_api_key: SecretStr | None = None
+    # Kill switch: false = deterministic template explanations only, no AI calls at all.
+    ai_enabled: bool = True
+    # Hard stop on AI spend per organisation per UTC day (cost control, plan section 8).
+    ai_daily_budget_usd: float = 10.0
 
     crm_sync_interval_minutes: int = 15
     gmail_sync_interval_minutes: int = 5

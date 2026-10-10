@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type Timeline, type TimelineEvent } from "../api";
+import AssessmentPanel from "../components/AssessmentPanel";
 import UsageChart from "../components/UsageChart";
 import { Badge, ErrorNote, Loading, Panel } from "../components/ui";
 import { ago, date, dateTime, label, money } from "../format";
@@ -33,7 +34,7 @@ function EventCard({ e, asOf }: { e: TimelineEvent; asOf: Date }) {
     );
   }
   return (
-    <li className={`rounded-md border px-3 py-2 text-sm ${e.injection_flag ? "border-risk" : "border-line"} bg-panel`}>
+    <li id={`ev-${e.id}`} className={`rounded-md border px-3 py-2 text-sm transition-shadow ${e.injection_flag ? "border-risk" : "border-line"} bg-panel`}>
       <div className="flex flex-wrap items-center gap-1.5 text-xs text-faint">
         <span>{dateTime(e.at)}</span>
         <span>·</span>
@@ -43,7 +44,13 @@ function EventCard({ e, asOf }: { e: TimelineEvent; asOf: Date }) {
         {e.cancelled && <Badge tone="warn">cancelled</Badge>}
         {e.auto_reply && <Badge tone="warn">auto-reply</Badge>}
         {e.bounce && <Badge tone="risk">bounced</Badge>}
-        {e.injection_flag && <Badge tone="risk">suspicious instructions</Badge>}
+        {e.injection_flag && <Badge tone="risk" title={e.injection_reason ?? ""}>instructions aimed at software</Badge>}
+        {e.labels.map((l, i) => (
+          <Badge key={i} tone={l.status === "accepted" ? "accent" : l.status === "quarantined" ? "risk" : "neutral"}
+            title={`"${l.quote}" (confidence ${l.confidence})`}>
+            {l.label.replace(/_/g, " ")}{l.status !== "accepted" ? ` · ${l.status}` : ""}
+          </Badge>
+        ))}
         <Badge title="How this record was linked to the account">
           {label(e.match.method)} {e.match.confidence < 1 ? `· ${Math.round(e.match.confidence * 100)}%` : ""}
         </Badge>
@@ -65,7 +72,7 @@ export default function AccountPage() {
   const [filter, setFilter] = useState<(typeof FILTERS)[number]["key"]>("all");
   const timeline = useQuery({
     queryKey: ["timeline", id, asOfParam],
-    queryFn: () => api<Timeline>(`/accounts/${id}${asOfParam ? `?as_of=${asOfParam}` : ""}`),
+    queryFn: () => api<Timeline>(`/accounts/${id}?limit=1000${asOfParam ? `&as_of=${asOfParam}` : ""}`),
   });
   const t = timeline.data;
   const asOf = t ? new Date(t.as_of) : new Date();
@@ -110,6 +117,22 @@ export default function AccountPage() {
       {timeline.isLoading && <Loading />}
       {timeline.error && <ErrorNote error={timeline.error} />}
       {t && !t.exists && <p className="text-sm text-muted">This account did not exist yet on that date.</p>}
+      {t?.exists && (t.flagged_emails?.length ?? 0) > 0 && (
+        <div className="mb-4 rounded-md border border-risk bg-risk-soft px-3 py-2 text-sm text-risk">
+          <div className="font-medium">
+            {t.flagged_emails!.length} email{t.flagged_emails!.length > 1 ? "s" : ""} contained instructions aimed at software.
+            They were not followed, and nothing they said counts towards the score.
+          </div>
+          <ul className="mt-1 space-y-0.5 text-xs">
+            {t.flagged_emails!.map((f) => (
+              <li key={f.id}>{date(f.at)} · {f.subject} — <span className="italic">"{f.quote ?? f.reason}"</span></li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {t?.exists && t.assessment && (
+        <AssessmentPanel a={t.assessment} cases={t.cases} explanation={t.explanation} asOfParam={asOfParam} accountId={t.account.id} />
+      )}
       {t?.exists && (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
           <div className="space-y-4">
@@ -154,9 +177,11 @@ export default function AccountPage() {
                 ))}
               </ul>
             </Panel>
-            <Panel title="Product usage">
-              <UsageChart weeks={t.usage_weekly ?? []} seats={t.account.seats_purchased} />
-            </Panel>
+            <div id="usage-panel" className="rounded-lg transition-shadow">
+              <Panel title="Product usage">
+                <UsageChart weeks={t.usage_weekly ?? []} seats={t.account.seats_purchased} />
+              </Panel>
+            </div>
           </div>
           <Panel
             title={`Timeline · ${t.event_count ?? 0} records`}

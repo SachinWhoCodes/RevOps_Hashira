@@ -4,7 +4,7 @@ from fastapi import Depends, FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
 from casefile.api.deps import csrf_guard
-from casefile.api.routers import accounts, auth, connections, identity
+from casefile.api.routers import accounts, auth, cases, connections, identity, insights, queue
 from casefile.config import get_settings
 
 settings = get_settings()
@@ -19,7 +19,7 @@ app.add_middleware(
     max_age=7 * 24 * 3600,
 )
 
-for module in (auth, accounts, connections, identity):
+for module in (auth, accounts, connections, identity, queue, insights, cases):
     app.include_router(module.router, prefix="/api")
 
 

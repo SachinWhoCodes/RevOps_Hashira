@@ -13,7 +13,7 @@ export default function LoginPage() {
     mutationFn: () => api<User>("/auth/login", { json: { email, password } }),
     onSuccess: (user) => {
       qc.setQueryData(["me"], user);
-      navigate("/accounts");
+      navigate("/queue");
     },
   });
   const submit = (e: FormEvent) => {

@@ -6,6 +6,7 @@ import json
 import secrets
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import typer
 from sqlalchemy import select
@@ -211,6 +212,191 @@ def google_auth(zone: str = typer.Option("read", help="read | write | seed")) ->
     }[zone]
     _set_env(target[1], token, target[0])
     typer.echo(f"Stored {target[1]} in {target[0].name}.")
+
+
+@app.command()
+def recompute(account: str = typer.Option("", help="Only this account (name).")) -> None:
+    """Recompute signals, scores, assessments and cases (the worker also does this)."""
+    from casefile.cases.service import RecomputeContext, recompute_account, recompute_all
+    from casefile.db.models import Account, Org
+    from casefile.db.session import get_sessionmaker
+
+    session = get_sessionmaker()()
+    try:
+        org = session.scalar(select(Org).where(Org.slug == get_settings().org_slug))
+        if org is None:
+            raise typer.BadParameter("run `casefile bootstrap` first")
+        if account:
+            acc = session.scalar(select(Account).where(Account.org_id == org.id, Account.name == account))
+            if acc is None:
+                raise typer.BadParameter(f"no account named {account!r}")
+            r = recompute_account(session, acc.id, RecomputeContext.build(session, org))
+            session.commit()
+            typer.echo(f"{r.status} opened={r.opened} resolved={r.resolved}")
+        else:
+            typer.echo(json.dumps(recompute_all(session, org)))
+    finally:
+        session.close()
+
+
+@app.command("ranking-report")
+def ranking_report(
+    truth: Path = typer.Option(None, help="ground_truth.json (default: synthetic dir)"),
+) -> None:
+    """How well today's ranking surfaces the planted at-risk accounts (label: simulated)."""
+    from casefile.db.models import Org
+    from casefile.db.session import get_sessionmaker
+    from casefile.scoring.evaluate import evaluate_ranking
+
+    path = truth or get_settings().synth_dir / "default" / "ground_truth.json"
+    session = get_sessionmaker()()
+    try:
+        org = session.scalar(select(Org).where(Org.slug == get_settings().org_slug))
+        assert org is not None
+        typer.echo(json.dumps(evaluate_ranking(session, org, json.loads(path.read_text())), indent=2))
+    finally:
+        session.close()
+
+
+def _org_session() -> tuple[Any, Any]:
+    from casefile.db.models import Org
+    from casefile.db.session import get_sessionmaker
+
+    session = get_sessionmaker()()
+    org = session.scalar(select(Org).where(Org.slug == get_settings().org_slug))
+    if org is None:
+        session.close()
+        raise typer.BadParameter("run `casefile bootstrap` first")
+    return session, org
+
+
+@app.command("scan-injections")
+def scan_injections_cmd() -> None:
+    """Run the rule-based injection detector over inbound emails (no AI, no cost)."""
+    from casefile.ai.injection import scan_injections
+
+    session, org = _org_session()
+    try:
+        flagged = scan_injections(session, org)
+        session.commit()
+        typer.echo(f"accounts with flagged emails: {len(flagged)}")
+    finally:
+        session.close()
+
+
+@app.command("read-emails")
+def read_emails_cmd(
+    limit: int = typer.Option(100, help="Maximum emails to read in this run (cost control)."),
+    since_days: int = typer.Option(120, help="Only emails from the last N days."),
+    open_cases_only: bool = typer.Option(
+        True, help="Only accounts with an open case (cheapest useful scope)."
+    ),
+    batch: bool = typer.Option(False, help="Use the Message Batches API (half price, can take up to hours)."),
+) -> None:
+    """AI email reader (Claude Haiku 5.5) over pending inbound customer emails. Prints the cost."""
+    from casefile.ai.email_reader import pending_emails, read_emails, read_emails_batch
+    from casefile.ai.explain import open_case_assessments
+    from casefile.ai.gateway import AiGateway, load_prompt
+    from casefile.db.models import Assessment
+    from casefile.worker.jobs import enqueue_recompute
+
+    session, org = _org_session()
+    try:
+        gateway = AiGateway(session, org.id)
+        before = gateway.spent_today()
+        _, version = load_prompt("email_reader")
+        emails = pending_emails(session, org, version, since_days=since_days)
+        if open_cases_only:
+            accounts = {session.get(Assessment, a).account_id for a in open_case_assessments(session, org)}
+            emails = [e for e in emails if e.account_id in accounts]
+        emails = emails[:limit]
+        run = read_emails_batch if batch else read_emails
+        out = run(session, org, gateway, emails)
+        enqueue_recompute(session, org.id, out.accounts)
+        session.commit()
+        typer.echo(
+            json.dumps(
+                {
+                    **{k: v for k, v in vars(out).items() if k != "accounts"},
+                    "accounts": len(out.accounts),
+                    "cost_usd": round(gateway.spent_today() - before, 5),
+                },
+                indent=2,
+            )
+        )
+    finally:
+        session.close()
+
+
+@app.command()
+def explain(
+    open_cases: bool = typer.Option(True, help="Explain every open case's current assessment."),
+    account: str = typer.Option("", help="Only this account (name)."),
+    no_ai: bool = typer.Option(False, help="Template explanations only (no AI, no cost)."),
+) -> None:
+    """Write and check case explanations (Claude Opus 5.5 + code checker). Prints the cost."""
+    from casefile.ai.explain import explain_assessment, open_case_assessments
+    from casefile.ai.gateway import AiGateway
+    from casefile.db.models import Account, AccountCase, CaseStatus
+
+    session, org = _org_session()
+    try:
+        gateway = None if no_ai else AiGateway(session, org.id)
+        before = gateway.spent_today() if gateway else 0.0
+        ids = open_case_assessments(session, org) if open_cases else []
+        if account:
+            acc = session.scalar(select(Account).where(Account.org_id == org.id, Account.name == account))
+            if acc is None:
+                raise typer.BadParameter(f"no account named {account!r}")
+            ids = [
+                c.current_assessment_id
+                for c in session.scalars(
+                    select(AccountCase).where(
+                        AccountCase.account_id == acc.id, AccountCase.status == CaseStatus.open
+                    )
+                )
+                if c.current_assessment_id
+            ]
+        for aid in dict.fromkeys(ids):
+            w = explain_assessment(session, aid, gateway)
+            session.commit()
+            if w is None:
+                typer.echo(f"{aid}: skipped (assessment superseded)")
+                continue
+            removed = len(w.report.get("removed", []))
+            typer.echo(f"{w.status:9} claims={len(w.claims)} removed={removed} | {w.headline}")
+        if gateway:
+            typer.echo(f"cost_usd: {gateway.spent_today() - before:.5f}")
+    finally:
+        session.close()
+
+
+@app.command("eval")
+def eval_cmd(
+    suite: str = typer.Argument(..., help="injection | email-labels"),
+    no_ai: bool = typer.Option(False, help="Rules only (injection suite), no cost."),
+) -> None:
+    """Run an evaluation and save results to evals/results/ (quality: simulated; cost: observed)."""
+    from casefile.ai.gateway import AiGateway
+    from casefile.evals.ai_evals import eval_email_labels, eval_injection, write_results
+
+    session, org = _org_session()
+    try:
+        gateway = None if no_ai else AiGateway(session, org.id)
+        if suite == "injection":
+            metrics = eval_injection(session, org, gateway)
+        elif suite == "email-labels":
+            if gateway is None:
+                raise typer.BadParameter("the email-label eval needs the AI")
+            truth = json.loads((get_settings().synth_dir / "default" / "ground_truth.json").read_text())
+            metrics = eval_email_labels(session, org, gateway, truth)
+        else:
+            raise typer.BadParameter(f"unknown suite {suite}")
+        session.commit()
+        typer.echo(json.dumps(metrics, indent=2, default=str))
+        typer.echo(f"saved {write_results(suite, metrics)}")
+    finally:
+        session.close()
 
 
 @app.command("match-report")

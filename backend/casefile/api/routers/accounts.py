@@ -11,11 +11,14 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from casefile.api.deps import current_org, get_db
+from casefile.cases.service import RecomputeContext, assess
 from casefile.db.models import (
     Account,
+    AccountCase,
     Activity,
     ActivityType,
     AppUser,
+    Assessment,
     Contact,
     Deal,
     DealType,
@@ -174,6 +177,17 @@ def _activity_event(a: Any, snap: Snapshot) -> dict[str, Any]:
         "auto_reply": bool(a.extra.get("auto_reply")),
         "bounce": bool(a.extra.get("bounce")),
         "injection_flag": a.injection_flag,
+        "injection_reason": a.injection_reason,
+        "injection_quote": a.injection_quote,
+        "labels": [
+            {
+                "label": lab.label,
+                "status": lab.status,
+                "confidence": round(lab.confidence, 2),
+                "quote": lab.quote,
+            }
+            for lab in a.labels
+        ],
         "match": {"method": a.match_method, "confidence": a.match_confidence},
     }
 
@@ -195,6 +209,38 @@ def account_timeline(
     snap = history.as_of(t)
     if snap is None:
         return {"as_of": t.isoformat(), "exists": False, "account": {"id": str(acc.id), "name": acc.name}}
+    # Scored live for this date with today's rules: the same code the queue and back-test use.
+    ctx = RecomputeContext.build(db, org)
+    assessed = assess(
+        snap, arr_fallback=ctx.arr_median, ambiguous_records=ctx.ambiguous_by_account.get(str(account_id), 0)
+    )
+    cases = db.scalars(
+        select(AccountCase).where(AccountCase.account_id == account_id).order_by(AccountCase.opened_at.desc())
+    ).all()
+    # The stored, checked explanation applies only to the current view and only if it was written
+    # for exactly these signals (same signature); the time machine shows signals, not prose.
+    explanation = None
+    if not as_of:
+        stored = db.scalar(
+            select(Assessment)
+            .where(Assessment.account_id == account_id)
+            .order_by(Assessment.created_at.desc())
+            .limit(1)
+        )
+        if stored is not None and stored.signature == assessed.score.signature and stored.claims is not None:
+            report = stored.checker_report or {}
+            explanation = {
+                "assessment_id": str(stored.id),
+                "status": stored.status.value,
+                "headline": stored.headline,
+                "claims": stored.claims,
+                "blind_spot_note": report.get("blind_spot_note") or "",
+                "model": stored.model,
+                "prompt_version": stored.prompt_version,
+                "removed_by_checker": len(report.get("removed", [])),
+                "stale_removed": len(report.get("stale_removed", [])),
+                "attempts": len(report.get("attempts", [])),
+            }
     activities = [a for a in snap.activities if not types or a.type in types]
     events = [_activity_event(a, snap) for a in activities]
     if not types or "crm_change" in types:
@@ -260,6 +306,45 @@ def account_timeline(
         ],
         "events": events[:limit],
         "event_count": len(events),
+        "assessment": {
+            "computed_for": t.isoformat(),
+            "churned": snap.is_churned(),
+            "risk": assessed.score.risk,
+            "opportunity": assessed.score.opportunity,
+            "confidence": assessed.score.confidence,
+            "priority": assessed.score.priority,
+            **{
+                k: assessed.score.breakdown[k]
+                for k in ("risk", "opportunity", "urgency", "arr", "confidence")
+            },
+            "signals": [h.to_dict() for h in assessed.hits],
+            "blind_spots": assessed.blind_spots,
+            "versions": {"scoring": assessed.score.breakdown["scoring_version"]},
+        },
+        "explanation": explanation,
+        "flagged_emails": [
+            {
+                "id": str(a.id),
+                "at": a.occurred_at.isoformat(),
+                "subject": a.subject,
+                "reason": a.injection_reason,
+                "quote": a.injection_quote,
+            }
+            for a in snap.activities
+            if a.injection_flag
+        ],
+        "cases": [
+            {
+                "id": str(c.id),
+                "kind": c.kind.value,
+                "status": c.status.value,
+                "opened_at": c.opened_at.isoformat(),
+                "resolved_at": c.resolved_at.isoformat() if c.resolved_at else None,
+                "feedback": c.feedback,
+                "feedback_note": c.feedback_note,
+            }
+            for c in cases
+        ],
     }
 
 

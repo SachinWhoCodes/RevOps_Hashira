@@ -37,6 +37,7 @@ from casefile.db.models import (
     AppUser,
     Contact,
     Deal,
+    EmailLabel,
     FieldHistory,
     MatchMethod,
     Org,
@@ -68,6 +69,7 @@ class ContactView:
     role: str
     status: str
     origin: str
+    status_since: datetime | None = None  # when the current status was recorded
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,16 @@ class DealView:
     close_date: date | None
     next_step: str
     next_step_since: datetime | None  # when the current next-step value was set
+    next_step_ever_set: bool = False  # had a non-empty next step at some point up to as_of
+    next_step_date: date | None = None
+
+
+@dataclass(frozen=True)
+class LabelView:
+    label: str
+    status: str  # accepted | possible | quarantined
+    confidence: float
+    quote: str
 
 
 @dataclass(frozen=True)
@@ -103,6 +115,9 @@ class ActivityView:
     injection_flag: bool
     match_method: str
     match_confidence: float
+    labels: tuple[LabelView, ...] = ()
+    injection_reason: str | None = None
+    injection_quote: str | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +153,20 @@ class Snapshot:
     def days_to_renewal(self) -> int | None:
         return (self.account.renewal_date - self.today).days if self.account.renewal_date else None
 
+    def local_date(self, dt: datetime) -> date:
+        return dt.astimezone(self.tz).date()
+
+    def is_churned(self) -> bool:
+        """No open renewal deal, and the most recent closed renewal deal was lost."""
+        renewals = [d for d in self.deals if d.deal_type == "renewal"]
+        if any(not d.is_closed for d in renewals):
+            return False
+        closed = sorted((d for d in renewals if d.close_date), key=lambda d: d.close_date or date.min)
+        return bool(closed) and not closed[-1].is_won
+
+    def contacts_with_role(self, role: str, *, active_only: bool = True) -> list[ContactView]:
+        return [c for c in self.contacts if c.role == role and (c.status == "active" or not active_only)]
+
 
 class _Fields:
     """Per-entity field history, searchable by time."""
@@ -163,6 +192,12 @@ class _Fields:
             return None
         i = bisect.bisect_right(entry[0], t)
         return entry[0][i - 1] if i else None
+
+    def values_until(self, entity_id: uuid.UUID, name: str, t: datetime) -> list[Any]:
+        entry = self._data.get((entity_id, name))
+        if not entry:
+            return []
+        return entry[1][: bisect.bisect_right(entry[0], t)]
 
     def changes(self, t: datetime) -> list[tuple[uuid.UUID, str, datetime, Any]]:
         return [
@@ -191,6 +226,7 @@ class AccountHistory:
         self.activities: list[Activity] = []
         self.usage: list[UsageDaily] = []
         self.owner_users: dict[str, uuid.UUID] = {}
+        self.labels: dict[uuid.UUID, list[LabelView]] = {}
         self.won: set[str] = set()
         self.lost: set[str] = set()
 
@@ -215,6 +251,18 @@ class AccountHistory:
                 .order_by(Activity.occurred_at)
             )
         )
+        # AI labels from the prompt version that last read each email. The label describes content
+        # that existed when the email arrived, so using it in a past snapshot leaks nothing.
+        read_version = {a.id: ((a.extra or {}).get("ai_read") or {}).get("prompt") for a in h.activities}
+        email_ids = [i for i, v in read_version.items() if v]
+        for start in range(0, len(email_ids), 1000):
+            for lab in session.scalars(
+                select(EmailLabel).where(EmailLabel.activity_id.in_(email_ids[start : start + 1000]))
+            ):
+                if lab.prompt_version == read_version.get(lab.activity_id):
+                    h.labels.setdefault(lab.activity_id, []).append(
+                        LabelView(lab.label, lab.status.value, lab.confidence, lab.quote or "")
+                    )
         h.usage = list(
             session.scalars(
                 select(UsageDaily).where(UsageDaily.account_id == account_id).order_by(UsageDaily.date)
@@ -271,6 +319,8 @@ class AccountHistory:
                     close_date=_day(f.value(d.id, "close_date", t)),
                     next_step=f.value(d.id, "next_step", t, "") or "",
                     next_step_since=f.since(d.id, "next_step", t),
+                    next_step_ever_set=any(v for v in f.values_until(d.id, "next_step", t)),
+                    next_step_date=_day(f.value(d.id, "next_step_date", t)),
                 )
             )
         open_renewals = sorted(
@@ -310,6 +360,7 @@ class AccountHistory:
                 role=f.value(c.id, "role", t, "unknown"),
                 status=f.value(c.id, "status", t, "active"),
                 origin=c.origin,
+                status_since=f.since(c.id, "status", t),
             )
             for c in self.contacts
             if self._exists(c.id, c.created_in_source_at, t)
@@ -335,6 +386,9 @@ class AccountHistory:
                 injection_flag=a.injection_flag,
                 match_method=a.match_method.value,
                 match_confidence=a.match_confidence,
+                labels=tuple(self.labels.get(a.id, ())),
+                injection_reason=a.injection_reason,
+                injection_quote=a.injection_quote,
             )
             for a in self.activities
             if a.known_at <= t and a.occurred_at >= earliest

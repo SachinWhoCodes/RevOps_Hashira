@@ -376,7 +376,13 @@ class Generator:
             p.dip_start = p.renewal - timedelta(days=rng.randint(60, 200))
             p.ooo_start = p.dip_start + timedelta(days=rng.randint(0, 10))
         elif p.story == "new_team":
-            p.new_dept_on = p.start + timedelta(days=rng.randint(60, 250))
+            if p.outcome is None:
+                # Current period: the new team started recently, so it is visible as "new" today.
+                p.new_dept_on = max(
+                    p.start + timedelta(days=30), self.today - timedelta(days=rng.randint(7, 25))
+                )
+            else:
+                p.new_dept_on = p.start + timedelta(days=rng.randint(60, 250))
         # Outcome-dependent close.
         if p.outcome == "late":
             p.close_on = p.renewal + timedelta(days=rng.randint(10, 40))

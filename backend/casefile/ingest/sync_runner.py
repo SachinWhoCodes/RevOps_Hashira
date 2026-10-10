@@ -11,13 +11,14 @@ import structlog
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from casefile.ai.injection import scan_injections
 from casefile.connectors.base import ConnectorError, RawItem, Reader
 from casefile.db.models import Connection, ConnectionStatus, Org, RawRecord, SyncRun, SyncStatus
 from casefile.identity.resolver import relink_crm_refs, resolve_identities
 from casefile.ingest.context import NormalizeContext
 from casefile.ingest.normalize import normalize
 from casefile.ingest.util import chunks, payload_hash
-from casefile.worker.jobs import enqueue_recompute
+from casefile.worker.jobs import enqueue, enqueue_recompute
 
 log = structlog.get_logger()
 
@@ -88,8 +89,17 @@ def run_sync(
             session.commit()
         relink_crm_refs(session, org)
         resolved = resolve_identities(session, org)
-        dirty = ctx.touched_accounts | resolved.touched_accounts
+        flagged = scan_injections(session, org)  # rule-based, no AI: always runs
+        dirty = ctx.touched_accounts | resolved.touched_accounts | {uuid.UUID(a) for a in flagged}
         enqueue_recompute(session, org.id, dirty)
+        if run.records_new:
+            enqueue(
+                session,
+                "read_emails",
+                {"org_id": str(org.id)},
+                org_id=org.id,
+                dedupe_key=f"read_emails:{org.id}",
+            )
         now = datetime.now(UTC)
         conn.last_success_at, conn.status = now, ConnectionStatus.active
         conn.consecutive_failures, conn.last_error = 0, None

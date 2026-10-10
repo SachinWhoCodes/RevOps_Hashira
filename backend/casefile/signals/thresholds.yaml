@@ -1,0 +1,49 @@
+# Signal thresholds — STARTING HYPOTHESES from the blueprint, to be tuned by the Phase 5 back-test.
+# Changing a value changes engine behaviour: bump `version` so assessments record which rules ran.
+version: 3
+
+meeting_gap:
+  min_days: 21              # days since the last held customer meeting
+  cancelled_lookback_days: 60
+
+missing_next_step:
+  renewal_window_days: 120  # only check renewal deals closing within this window
+  stale_days: 30            # a next step untouched this long counts as missing
+  no_deal_window_days: 60   # renewal this close with no open renewal deal at all
+
+champion_silence:
+  min_unanswered: 2         # outbound emails to the champion with no reply...
+  min_span_days: 10         # ...where the first one is at least this old
+  lookback_days: 60
+
+usage_decline:
+  window_days: 28           # last N days vs the N days before (sudden drops)...
+  min_drop_pct: 25
+  baseline_days: 90         # ...and last N days vs the 90 days before them (slow slides; added v2)
+  min_drop_pct_vs_baseline: 30
+  min_baseline_avg: 3       # average daily active users in the earlier window; below this, ignore
+  min_days_covered: 20      # each window needs at least this many days of data
+
+renewal_proximity:
+  window_days: 90
+
+champion_departure:
+  lookback_days: 120
+
+seat_saturation:
+  min_ratio: 0.9
+  recent_days: 14           # average over this window, so one busy day doesn't count
+
+new_team_adoption:
+  recent_days: 28
+  baseline_days: 90
+  min_avg_users: 2.0        # average daily active users from the new department
+
+executive_engagement:
+  lookback_days: 60
+
+negative_tone:            # v3: needs the AI email reader; accepted labels only
+  lookback_days: 60
+
+upgrade_interest:         # v3
+  lookback_days: 90

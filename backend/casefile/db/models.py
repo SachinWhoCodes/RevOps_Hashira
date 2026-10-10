@@ -563,6 +563,9 @@ class Signal(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     org_id: Mapped[uuid.UUID] = _org_fk()
     account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account.id", ondelete="CASCADE"))
+    assessment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("assessment.id", ondelete="CASCADE"), index=True
+    )
     type: Mapped[str] = mapped_column(String(64))
     polarity: Mapped[Polarity] = mapped_column(_enum(Polarity))
     value: Mapped[float] = mapped_column(Float)
@@ -596,7 +599,10 @@ class Assessment(Base):
     model: Mapped[str | None] = mapped_column(String(64))
     prompt_version: Mapped[str | None] = mapped_column(String(64))
     engine_version: Mapped[str] = mapped_column(String(32))
+    # Changes only when the set of signals or their evidence changes (drives "re-assess on change").
+    signature: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = _created()
+    updated_at: Mapped[datetime] = _updated()
 
 
 class AccountCase(Base):
@@ -738,6 +744,21 @@ class LlmCall(Base):
     ok: Mapped[bool] = mapped_column(default=True)
     error: Mapped[str | None] = mapped_column(Text)
     account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("account.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = _created()
+
+
+class LlmCache(Base):
+    """Validated AI outputs keyed by a hash of (prompt version, model, exact input).
+    The same input is never paid for twice; a prompt or model change makes a new key."""
+
+    __tablename__ = "llm_cache"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    org_id: Mapped[uuid.UUID] = _org_fk()
+    purpose: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(64))
+    prompt_version: Mapped[str] = mapped_column(String(64))
+    output: Mapped[dict[str, Any]]
     created_at: Mapped[datetime] = _created()
 
 
