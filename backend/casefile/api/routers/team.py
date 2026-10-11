@@ -1,8 +1,9 @@
 """Team: who can log in (Phase C1). Admin-only management, plus the public invite-acceptance step.
 
-There is no email service: an invite produces a one-time link that is shown once to the admin, who
-sends it however they like. Only a SHA-256 of the token is stored; a link works once, expires after
-72 hours, and a newer invite revokes older ones. Every change is audited (never the token).
+An invite produces a one-time link that is either emailed to the person (Brevo, or ``data/outbox`` on a
+local deployment) or shown once to the admin, who sends it however they like. Only a SHA-256 of the
+token is stored; a link works once, expires after 72 hours, and a newer invite revokes older ones.
+Every change is audited (never the token).
 """
 
 from __future__ import annotations
@@ -142,7 +143,13 @@ def invite(
             raise HTTPException(503, f"could not send the invite email: {exc}") from exc
         emailed = True
     db.commit()
-    return {"link": link, "expires_at": expires.isoformat(), "shown_once": True, "emailed": emailed}
+    # An emailed link travels only in the email; otherwise it is shown to the admin this once.
+    return {
+        "link": None if emailed else link,
+        "expires_at": expires.isoformat(),
+        "shown_once": not emailed,
+        "emailed": emailed,
+    }
 
 
 class MemberChange(BaseModel):

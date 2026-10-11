@@ -1,96 +1,118 @@
 import { useMutation } from "@tanstack/react-query";
+import { ArrowUp, BadgeCheck, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { api, type QaAnswer } from "../api";
-import { useEvidence } from "./EvidenceDrawer";
-import { Badge } from "./ui";
+import { cn } from "../lib/cn";
+import { EvidenceChip } from "./domain";
+import { Callout, Card, Skeleton, Tooltip } from "./ui";
 
 const EXAMPLES = ["Who else have we spoken to besides the champion?", "How has usage changed recently?", "Has anyone mentioned a competitor?"];
 
 const ERRORS: Record<string, string> = {
-  budget_exceeded: "Today's AI budget is used up. Try again tomorrow or raise AI_DAILY_BUDGET_USD.",
-  ai_disabled: "AI is switched off (AI_ENABLED=false).",
-  no_api_key: "No Anthropic API key is configured.",
+  budget_exceeded: "Today's AI budget is used up. Try again tomorrow, or raise the daily cap.",
+  ai_disabled: "AI is switched off on this server, so questions can't be answered.",
+  no_api_key: "No Anthropic API key is configured on this server.",
 };
 
 // Claude answers from read-only tools over this account; code checks every sentence before showing it.
 export default function AskPanel({ accountId }: { accountId: string }) {
-  const evidence = useEvidence();
   const [question, setQuestion] = useState("");
-  const ask = useMutation({
-    mutationFn: (q: string) => api<QaAnswer>(`/accounts/${accountId}/ask`, { json: { question: q } }),
-  });
+  const ask = useMutation({ mutationFn: (q: string) => api<QaAnswer>(`/accounts/${accountId}/ask`, { json: { question: q } }) });
   const a = ask.data;
   const submit = (q: string) => {
     if (q.trim()) ask.mutate(q.trim());
   };
   return (
-    <section className="mb-4 rounded-lg border border-line bg-panel">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
-        <h2 className="text-sm font-semibold">Ask about this account</h2>
-        <Badge title="Claude reads this account through read-only tools. Every sentence must cite the records it rests on, and code checks every number, date and name against them before you see it.">
-          read-only · every sentence checked
-        </Badge>
-      </header>
-      <div className="space-y-3 p-4">
-        <form
-          className="flex flex-col gap-2 sm:flex-row"
-          onSubmit={(e) => {
-            e.preventDefault();
-            submit(question);
+    <Card
+      title="Ask about this account"
+      description="Claude reads this account through read-only tools; code checks every sentence"
+      icon={Sparkles}
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit(question);
+        }}
+        className="group relative rounded-2xl border border-line bg-subtle p-1.5 shadow-xs transition-[border-color,box-shadow] focus-within:border-accent focus-within:shadow-ring"
+      >
+        <textarea
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              submit(question);
+            }
           }}
-        >
-          <input
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            maxLength={500}
-            placeholder="e.g. Who else at this company have we spoken to?"
-            className="min-w-0 flex-1 rounded-md border border-line bg-panel px-3 py-1.5 text-sm"
-          />
-          <button type="submit" disabled={ask.isPending || !question.trim()}
-            className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
-            {ask.isPending ? "Looking it up…" : "Ask"}
+          rows={2}
+          maxLength={500}
+          placeholder="e.g. Who else at this company have we spoken to?"
+          aria-label="Your question"
+          className="block w-full resize-none bg-transparent px-3 py-2 text-[14px] text-ink outline-none placeholder:text-faint"
+        />
+        <div className="flex items-center justify-between gap-2 px-2 pb-1">
+          <span className="text-[11.5px] text-faint">About $0.03 per new question · repeats on an unchanged account are free</span>
+          <button
+            type="submit"
+            disabled={ask.isPending || !question.trim()}
+            aria-label="Ask"
+            className="grid size-8 place-items-center rounded-full bg-accent text-white shadow-sm transition-[transform,opacity] hover:scale-105 disabled:scale-100 disabled:opacity-40"
+          >
+            <ArrowUp className="size-4" />
           </button>
-        </form>
-        <p className="-mt-1 text-[11px] text-faint">
-          Each new question is one paid AI call (about $0.03); asking the same question again about an unchanged account is free.
-        </p>
-        {!a && !ask.isPending && (
-          <div className="flex flex-wrap gap-1.5">
-            {EXAMPLES.map((q) => (
-              <button key={q} onClick={() => setQuestion(q)} title="Fills the box; nothing is sent until you press Ask"
-                className="rounded-full border border-line px-2 py-0.5 text-xs text-muted hover:border-accent hover:text-accent">
+        </div>
+      </form>
+
+      {!a && !ask.isPending && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {EXAMPLES.map((q) => (
+            <Tooltip key={q} content="Fills the box. Nothing is sent until you ask.">
+              <button
+                onClick={() => setQuestion(q)}
+                className="rounded-full border border-line bg-panel px-3 py-1 text-xs text-muted transition-colors hover:border-accent/40 hover:text-accent-fg"
+              >
                 {q}
               </button>
+            </Tooltip>
+          ))}
+        </div>
+      )}
+
+      {ask.isPending && (
+        <div className="mt-4 space-y-2.5 rounded-xl border border-line p-4" role="status" aria-label="Looking it up">
+          <div className="flex items-center gap-2 text-[13px] text-muted">
+            <Sparkles className="size-4 animate-pulse text-accent-fg" /> Reading the timeline, usage and people…
+          </div>
+          <Skeleton className="h-3.5 w-11/12" />
+          <Skeleton className="h-3.5 w-4/5" />
+          <Skeleton className="h-3.5 w-2/3" />
+        </div>
+      )}
+      {ask.error && <Callout className="mt-4" tone="risk" title="No answer">{ask.error instanceof Error ? ask.error.message : "Something went wrong"}</Callout>}
+      {a && a.error && <Callout className="mt-4" tone="warn" title="No answer">{ERRORS[a.error] ?? a.error}</Callout>}
+      {a && !a.error && (
+        <div className="mt-4 rounded-xl border border-line p-4 animate-fade-up">
+          <div className="mb-2 text-xs font-medium text-muted">{a.question}</div>
+          <div className="space-y-2">
+            {a.sentences.map((s, i) => (
+              <p key={i} className="text-[14px] leading-relaxed text-ink">
+                {s.text}
+                {s.evidence.map((ev) => <EvidenceChip key={ev.eid} e={ev} />)}
+              </p>
             ))}
           </div>
-        )}
-        {ask.error && <p className="text-sm text-risk">{ask.error instanceof Error ? ask.error.message : "Something went wrong"}</p>}
-        {a && a.error && <p className="text-sm text-warn">{ERRORS[a.error] ?? `No answer: ${a.error}`}</p>}
-        {a && !a.error && (
-          <div className="rounded-md border border-line bg-canvas px-3 py-2.5">
-            <ol className="space-y-1.5 text-sm">
-              {a.sentences.map((s, i) => (
-                <li key={i} className="leading-relaxed">
-                  {s.text}{" "}
-                  {s.evidence.map((ev) => (
-                    <button key={ev.eid} onClick={() => evidence.open(ev)} title={ev.label}
-                      className="ml-0.5 rounded border border-line bg-panel px-1 py-px align-middle text-[11px] font-medium text-accent hover:border-accent">
-                      {ev.eid}
-                    </button>
-                  ))}
-                </li>
-              ))}
-            </ol>
-            {a.gaps && <p className="mt-2 text-xs text-muted">Not in the data: {a.gaps}</p>}
-            {!a.sentences.length && !a.gaps && <p className="text-sm text-muted">Nothing in the answer passed the checks.</p>}
-            <p className="mt-2 text-[11px] text-faint">
-              {a.model} · {a.prompt_version} · looked at {a.tools_used.join(", ") || "nothing"}
-              {a.removed.length > 0 && ` · ${a.removed.length} sentence(s) removed by the checker`}
-              {a.cached ? " · cached answer, no cost" : ` · $${a.cost_usd.toFixed(3)}`}
-            </p>
+          {a.gaps && <p className="mt-3 text-[13px] text-muted"><span className="font-medium text-ink">Not in the data:</span> {a.gaps}</p>}
+          {!a.sentences.length && !a.gaps && <p className="text-sm text-muted">Nothing in the answer passed the checks.</p>}
+          <div className={cn("mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-line pt-3 text-[11.5px] text-faint")}>
+            <BadgeCheck className="size-3.5 text-ok-fg" aria-hidden />
+            <span>Every sentence checked</span>
+            {a.removed.length > 0 && <span>· {a.removed.length} removed by the checker</span>}
+            <span>· looked at {a.tools_used.join(", ") || "nothing"}</span>
+            <span>· {a.cached ? "cached answer, no cost" : `$${a.cost_usd.toFixed(3)}`}</span>
+            <span className="ml-auto">{a.model}</span>
           </div>
-        )}
-      </div>
-    </section>
+        </div>
+      )}
+    </Card>
   );
 }

@@ -18,7 +18,7 @@ db: ## Start Postgres (port 5433) and wait until ready
 
 migrate: ## Apply migrations to dev and test databases
 	$(UV) alembic upgrade head
-	$(UV) alembic -x url=postgresql+psycopg://casefile:casefile@localhost:5433/casefile_test upgrade head
+	$(UV) alembic -x url=postgresql+psycopg://casefile:casefile@127.0.0.1:5433/casefile_test upgrade head
 
 reset: ## DEV ONLY: drop and recreate the dev database schema (all data is lost)
 	$(UV) alembic downgrade base

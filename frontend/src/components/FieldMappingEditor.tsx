@@ -1,17 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { ArrowRight, Building, CircleCheck, Contact, Handshake, ListTree, Plus, RefreshCw, Save, X } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { api } from "../api";
-import { Badge, ErrorNote, Loading, Panel } from "./ui";
+import { Badge, Button, Callout, Card, Checkbox, ErrorNote, Field, Input, Loading, SectionLabel, Select, useToast } from "./ui";
 
 type ValueMap = Record<string, string>;
 type Mapping = {
   hubspot: {
     company: { seats_purchased: string | null; renewal_date: string | null; arr: string | null };
     contact: { role_property: string; role_values: ValueMap; status_property: string; status_values: ValueMap };
-    deal: {
-      type_property: string; type_values: ValueMap; won_stages: string[]; lost_stages: string[];
-      next_step_property: string; next_step_date_property: string | null;
-    };
+    deal: { type_property: string; type_values: ValueMap; won_stages: string[]; lost_stages: string[]; next_step_property: string; next_step_date_property: string | null };
     engagement_types: string[];
   };
 };
@@ -23,43 +21,54 @@ const STATUSES = ["active", "left"];
 const DEAL_TYPES = ["renewal", "new", "expansion", "other"];
 const ENGAGEMENTS = ["notes", "tasks", "calls", "emails", "meetings"];
 
-function Field({ label, hint, value, onChange, optional }: {
-  label: string; hint?: string; value: string | null; onChange: (v: string | null) => void; optional?: boolean;
-}) {
+function Prop({ label, hint, value, onChange, optional }: { label: string; hint?: string; value: string | null; onChange: (v: string | null) => void; optional?: boolean }) {
   return (
-    <label className="block text-sm">
-      <span className="text-muted">{label}{optional && <span className="text-faint"> (optional)</span>}</span>
-      <input value={value ?? ""} onChange={(e) => onChange(e.target.value.trim() === "" && optional ? null : e.target.value)}
-        className="mt-0.5 w-full rounded-md border border-line px-2 py-1 font-mono text-xs" placeholder={optional ? "not used" : ""} />
-      {hint && <span className="text-[11px] text-faint">{hint}</span>}
-    </label>
+    <Field label={label} hint={hint} optional={optional}>
+      <Input
+        inputSize="sm"
+        className="[&_input]:font-mono [&_input]:text-[12.5px]"
+        value={value ?? ""}
+        placeholder={optional ? "not used" : ""}
+        onChange={(e) => onChange(e.target.value.trim() === "" && optional ? null : e.target.value)}
+      />
+    </Field>
   );
 }
 
-function Values({ label, values, options, onChange }: {
-  label: string; values: ValueMap; options: string[]; onChange: (v: ValueMap) => void;
-}) {
+function Values({ label, values, options, onChange }: { label: string; values: ValueMap; options: string[]; onChange: (v: ValueMap) => void }) {
   const rows = Object.entries(values);
-  const set = (i: number, key: string, meaning: string) => {
-    const next = rows.map((r, j) => (j === i ? [key, meaning] : r));
-    onChange(Object.fromEntries(next));
-  };
+  const set = (i: number, key: string, meaning: string) => onChange(Object.fromEntries(rows.map((r, j) => (j === i ? [key, meaning] : r))));
   return (
-    <div className="text-sm">
-      <div className="text-muted">{label}</div>
-      <ul className="mt-1 space-y-1">
+    <div>
+      <div className="mb-1.5 text-[13px] font-medium text-ink">{label}</div>
+      <ul className="space-y-1.5">
         {rows.map(([k, v], i) => (
           <li key={i} className="flex items-center gap-1.5">
-            <input value={k} onChange={(e) => set(i, e.target.value, v)} className="min-w-0 flex-1 rounded-md border border-line px-2 py-0.5 font-mono text-xs" aria-label="CRM value" />
-            <span className="shrink-0 text-faint">→</span>
-            <select value={v} onChange={(e) => set(i, k, e.target.value)} className="w-36 shrink-0 rounded-md border border-line px-1 py-0.5 text-xs" aria-label="Meaning">
+            <Input inputSize="sm" className="min-w-0 flex-1 [&_input]:font-mono [&_input]:text-[12.5px]" value={k} onChange={(e) => set(i, e.target.value, v)} aria-label="CRM value" />
+            <ArrowRight className="size-3.5 shrink-0 text-faint" aria-hidden />
+            <Select selectSize="sm" className="w-36 shrink-0" value={v} onChange={(e) => set(i, k, e.target.value)} aria-label="Meaning">
               {options.map((o) => <option key={o} value={o}>{o.replace("_", " ")}</option>)}
-            </select>
-            <button onClick={() => onChange(Object.fromEntries(rows.filter((_, j) => j !== i)))} className="shrink-0 text-xs text-faint hover:text-risk" aria-label="Remove">×</button>
+            </Select>
+            <button onClick={() => onChange(Object.fromEntries(rows.filter((_, j) => j !== i)))} aria-label="Remove" className="rounded-md p-1 text-faint transition-colors hover:bg-risk-soft hover:text-risk-fg">
+              <X className="size-3.5" />
+            </button>
           </li>
         ))}
       </ul>
-      <button onClick={() => onChange({ ...values, "": options[options.length - 1] })} className="mt-1 text-xs text-accent hover:underline">+ add a CRM value</button>
+      <button onClick={() => onChange({ ...values, "": options[options.length - 1] })} className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-accent-fg hover:underline">
+        <Plus className="size-3.5" /> Add a CRM value
+      </button>
+    </div>
+  );
+}
+
+function Column({ icon: Icon, title, children }: { icon: typeof Building; title: string; children: ReactNode }) {
+  return (
+    <div className="space-y-3.5">
+      <SectionLabel className="flex items-center gap-1.5">
+        <Icon className="size-3.5" aria-hidden /> {title}
+      </SectionLabel>
+      {children}
     </div>
   );
 }
@@ -68,6 +77,7 @@ function Values({ label, values, options, onChange }: {
 // data changes until "Re-apply" rebuilds it from the raw records already fetched.
 export default function FieldMappingEditor() {
   const qc = useQueryClient();
+  const toast = useToast();
   const q = useQuery({ queryKey: ["field-mapping"], queryFn: () => api<MappingResponse>("/admin/field-mapping") });
   const [draft, setDraft] = useState<Mapping | null>(null);
   const m = draft ?? q.data?.mapping ?? null;
@@ -80,78 +90,89 @@ export default function FieldMappingEditor() {
   const check = useMutation({ mutationFn: (body: Mapping) => api<Check>("/admin/field-mapping/check", { json: body }) });
   const save = useMutation({
     mutationFn: (body: Mapping) => api<{ version: number }>("/admin/field-mapping", { method: "PUT", json: body }),
-    onSuccess: () => { setDraft(null); qc.invalidateQueries({ queryKey: ["field-mapping"] }); qc.invalidateQueries({ queryKey: ["config"] }); },
+    onSuccess: (r) => {
+      setDraft(null);
+      qc.invalidateQueries({ queryKey: ["field-mapping"] });
+      qc.invalidateQueries({ queryKey: ["config"] });
+      toast({ tone: "ok", title: `Saved as version ${r.version}`, description: "Stored data still uses the old meanings until you re-apply." });
+    },
   });
-  const reapply = useMutation({ mutationFn: () => api<{ queued: boolean }>("/admin/field-mapping/reapply", { json: {} }) });
+  const reapply = useMutation({
+    mutationFn: () => api<{ queued: boolean }>("/admin/field-mapping/reapply", { json: {} }),
+    onSuccess: () => toast({ tone: "ok", title: "Re-apply queued", description: "The worker rebuilds stored data from the raw records (no re-fetch, no AI) and rescores every account." }),
+  });
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorNote error={q.error} />;
   if (!m) return null;
   const h = m.hubspot;
   const noChampion = !Object.values(h.contact.role_values).includes("champion");
+  const splitList = (v: string | null) => (v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+
   return (
-    <Panel
+    <Card
       title="CRM field mapping"
-      actions={<Badge>{q.data?.version ? `version ${q.data.version}` : "defaults"}</Badge>}
+      description="Which HubSpot properties mean what for your company. Every save is a new version."
+      icon={ListTree}
+      actions={
+        <>
+          {draft && <Badge tone="warn" dot>Unsaved changes</Badge>}
+          <Badge>{q.data?.version ? `Version ${q.data.version}` : "Defaults"}</Badge>
+        </>
+      }
     >
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        <div className="space-y-2">
-          <div className="text-xs font-semibold uppercase tracking-wide text-faint">Company</div>
-          <Field label="Seats purchased" optional value={h.company.seats_purchased} onChange={(v) => edit((x) => { x.company.seats_purchased = v; })} />
-          <Field label="Renewal date" optional hint="Empty: use the open renewal deal's close date." value={h.company.renewal_date} onChange={(v) => edit((x) => { x.company.renewal_date = v; })} />
-          <Field label="ARR" optional hint="Empty: derive from renewal deal amounts." value={h.company.arr} onChange={(v) => edit((x) => { x.company.arr = v; })} />
-        </div>
-        <div className="space-y-2">
-          <div className="text-xs font-semibold uppercase tracking-wide text-faint">Contact</div>
-          <Field label="Role property" value={h.contact.role_property} onChange={(v) => edit((x) => { x.contact.role_property = v ?? ""; })} />
+      <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-3">
+        <Column icon={Building} title="Company">
+          <Prop label="Seats purchased" optional value={h.company.seats_purchased} onChange={(v) => edit((x) => { x.company.seats_purchased = v; })} />
+          <Prop label="Renewal date" optional hint="Empty: use the open renewal deal's close date." value={h.company.renewal_date} onChange={(v) => edit((x) => { x.company.renewal_date = v; })} />
+          <Prop label="ARR" optional hint="Empty: derive from renewal deal amounts." value={h.company.arr} onChange={(v) => edit((x) => { x.company.arr = v; })} />
+        </Column>
+        <Column icon={Contact} title="Contact">
+          <Prop label="Role property" value={h.contact.role_property} onChange={(v) => edit((x) => { x.contact.role_property = v ?? ""; })} />
           <Values label="Role values" values={h.contact.role_values} options={ROLES} onChange={(v) => edit((x) => { x.contact.role_values = v; })} />
           {noChampion && (
-            <p className="rounded-md bg-warn-soft px-2 py-1 text-[11px] text-warn">
-              No CRM value means "champion". Casefile will infer a likely champion per account (the contact who writes and meets most), labelled as inferred.
-            </p>
+            <Callout tone="warn">No CRM value means “champion”. Casefile will infer a likely champion per account (the contact who writes and meets most), labelled as inferred.</Callout>
           )}
-          <Field label="Status property" value={h.contact.status_property} onChange={(v) => edit((x) => { x.contact.status_property = v ?? ""; })} />
+          <Prop label="Status property" value={h.contact.status_property} onChange={(v) => edit((x) => { x.contact.status_property = v ?? ""; })} />
           <Values label="Status values" values={h.contact.status_values} options={STATUSES} onChange={(v) => edit((x) => { x.contact.status_values = v; })} />
-        </div>
-        <div className="space-y-2">
-          <div className="text-xs font-semibold uppercase tracking-wide text-faint">Deal</div>
-          <Field label="Type property" value={h.deal.type_property} onChange={(v) => edit((x) => { x.deal.type_property = v ?? ""; })} />
+        </Column>
+        <Column icon={Handshake} title="Deal">
+          <Prop label="Type property" value={h.deal.type_property} onChange={(v) => edit((x) => { x.deal.type_property = v ?? ""; })} />
           <Values label="Type values" values={h.deal.type_values} options={DEAL_TYPES} onChange={(v) => edit((x) => { x.deal.type_values = v; })} />
-          <Field label="Won stages (comma separated)" value={h.deal.won_stages.join(", ")} onChange={(v) => edit((x) => { x.deal.won_stages = (v ?? "").split(",").map((s) => s.trim()).filter(Boolean); })} />
-          <Field label="Lost stages (comma separated)" value={h.deal.lost_stages.join(", ")} onChange={(v) => edit((x) => { x.deal.lost_stages = (v ?? "").split(",").map((s) => s.trim()).filter(Boolean); })} />
-          <Field label="Next step property" value={h.deal.next_step_property} onChange={(v) => edit((x) => { x.deal.next_step_property = v ?? ""; })} />
-          <Field label="Next step date property" optional value={h.deal.next_step_date_property} onChange={(v) => edit((x) => { x.deal.next_step_date_property = v; })} />
+          <Prop label="Won stages" hint="Comma separated" value={h.deal.won_stages.join(", ")} onChange={(v) => edit((x) => { x.deal.won_stages = splitList(v); })} />
+          <Prop label="Lost stages" hint="Comma separated" value={h.deal.lost_stages.join(", ")} onChange={(v) => edit((x) => { x.deal.lost_stages = splitList(v); })} />
+          <Prop label="Next step property" value={h.deal.next_step_property} onChange={(v) => edit((x) => { x.deal.next_step_property = v ?? ""; })} />
+          <Prop label="Next step date property" optional value={h.deal.next_step_date_property} onChange={(v) => edit((x) => { x.deal.next_step_date_property = v; })} />
+        </Column>
+      </div>
+
+      <div className="mt-6 rounded-xl border border-line bg-subtle px-4 py-3">
+        <div className="mb-2 text-[13px] font-medium text-ink">Activity to read from the CRM</div>
+        <div className="flex flex-wrap gap-x-5 gap-y-2">
+          {ENGAGEMENTS.map((e) => (
+            <Checkbox
+              key={e}
+              label={<span className="capitalize">{e}</span>}
+              checked={h.engagement_types.includes(e)}
+              onChange={(on) => edit((x) => { x.engagement_types = on ? [...x.engagement_types, e] : x.engagement_types.filter((y) => y !== e); })}
+            />
+          ))}
         </div>
       </div>
-      <div className="mt-4 text-sm">
-        <span className="text-muted">Read from the CRM: </span>
-        {ENGAGEMENTS.map((e) => (
-          <label key={e} className="mr-3 inline-flex items-center gap-1 text-xs">
-            <input type="checkbox" checked={h.engagement_types.includes(e)}
-              onChange={(ev) => edit((x) => { x.engagement_types = ev.target.checked ? [...x.engagement_types, e] : x.engagement_types.filter((y) => y !== e); })} />
-            {e}
-          </label>
-        ))}
-      </div>
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <button onClick={() => check.mutate(m)} className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent">Check</button>
-        <button disabled={!draft || save.isPending} onClick={() => save.mutate(m)} className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
-          Save as a new version
-        </button>
-        {draft && <button onClick={() => setDraft(null)} className="text-sm text-muted hover:underline">Discard changes</button>}
-        <button onClick={() => reapply.mutate()} disabled={reapply.isPending} className="ml-auto rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent">
-          Re-apply to stored data
-        </button>
-      </div>
+
       {check.data && (
-        <div className={`mt-2 rounded-md px-3 py-2 text-xs ${check.data.ok ? "bg-ok-soft text-ok" : "bg-risk-soft text-risk"}`}>
-          {check.data.ok ? "Looks right." : "Problems:"}
-          {check.data.problems.map((p) => <div key={p}>• {p}</div>)}
-          {!check.data.checked_against_crm && <div className="text-muted">{check.data.note ?? "Not checked against a live CRM."}</div>}
-        </div>
+        <Callout className="mt-4" tone={check.data.ok ? "ok" : "risk"} title={check.data.ok ? "Looks right" : "Problems found"} onDismiss={() => check.reset()}>
+          {check.data.problems.length > 0 && <ul className="mt-1 list-disc space-y-0.5 pl-4">{check.data.problems.map((p) => <li key={p}>{p}</li>)}</ul>}
+          {!check.data.checked_against_crm && <div className="mt-1">{check.data.note ?? "Not checked against a live CRM."}</div>}
+        </Callout>
       )}
-      {save.error && <div className="mt-2"><ErrorNote error={save.error} /></div>}
-      {save.isSuccess && <p className="mt-2 text-xs text-ok">Saved. Stored data still uses the old meanings until you re-apply.</p>}
-      {reapply.isSuccess && <p className="mt-2 text-xs text-muted">Queued: the worker rebuilds stored data from the raw records (no re-fetch, no AI) and rescores every account.</p>}
-    </Panel>
+      {save.error && <div className="mt-4"><ErrorNote error={save.error} /></div>}
+
+      <div className="sticky bottom-3 z-10 mt-5 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel/90 p-2.5 shadow-md backdrop-blur">
+        <Button icon={CircleCheck} loading={check.isPending} onClick={() => check.mutate(m)}>Check</Button>
+        <Button variant="primary" icon={Save} disabled={!draft} loading={save.isPending} onClick={() => save.mutate(m)}>Save as a new version</Button>
+        {draft && <Button variant="ghost" onClick={() => setDraft(null)}>Discard changes</Button>}
+        <Button className="ml-auto" icon={RefreshCw} loading={reapply.isPending} onClick={() => reapply.mutate()}>Re-apply to stored data</Button>
+      </div>
+    </Card>
   );
 }

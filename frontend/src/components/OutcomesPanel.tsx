@@ -1,9 +1,12 @@
+import { Check, Minus, Activity } from "lucide-react";
 import type { OutcomeEvents, PlayOutcomeView } from "../api";
 import { date, label } from "../format";
-import { Badge } from "./ui";
+import { cn } from "../lib/cn";
+import { Badge, Card, Tooltip } from "./ui";
 
-const tone = { improved: "ok", no_change: "neutral", worse: "risk", pending: "neutral" } as const;
-const resultText = { improved: "improved", no_change: "no change", worse: "worse", pending: "pending" } as const;
+const resultTone = { improved: "ok", no_change: "neutral", worse: "risk", pending: "neutral" } as const;
+const resultText = { improved: "Improved", no_change: "No change", worse: "Worse", pending: "Pending" } as const;
+const node = { improved: "bg-ok border-ok", no_change: "bg-faint border-faint", worse: "bg-risk border-risk", pending: "bg-panel border-line-strong" } as const;
 
 const EVENTS: [keyof OutcomeEvents, string][] = [
   ["champion_replied", "Champion replied"],
@@ -15,14 +18,18 @@ const EVENTS: [keyof OutcomeEvents, string][] = [
 
 function Events({ e }: { e: OutcomeEvents }) {
   return (
-    <ul className="grid gap-x-4 gap-y-0.5 text-xs sm:grid-cols-2">
+    <ul className="grid gap-x-6 gap-y-1.5 text-[13px] sm:grid-cols-2">
       {EVENTS.map(([k, text]) => (
-        <li key={k} className={e[k] ? "text-ok" : "text-faint"}>
-          {e[k] ? "✓" : "–"} {text}
+        <li key={k} className={cn("flex items-center gap-2", e[k] ? "text-ink" : "text-faint")}>
+          <span className={cn("grid size-4 place-items-center rounded-full", e[k] ? "bg-ok-soft text-ok-fg" : "bg-hover")}>
+            {e[k] ? <Check className="size-3" strokeWidth={3} /> : <Minus className="size-3" />}
+          </span>
+          {text}
         </li>
       ))}
       {e.usage_change_pct != null && (
-        <li className={e.usage_change_pct > 0 ? "text-ok" : e.usage_change_pct < 0 ? "text-risk" : "text-faint"}>
+        <li className={cn("flex items-center gap-2", e.usage_change_pct > 0 ? "text-ok-fg" : e.usage_change_pct < 0 ? "text-risk-fg" : "text-faint")}>
+          <span className="w-4 text-center font-semibold">{e.usage_change_pct > 0 ? "↑" : e.usage_change_pct < 0 ? "↓" : "–"}</span>
           Usage {e.usage_change_pct > 0 ? "+" : ""}{e.usage_change_pct}% (14-day average)
         </li>
       )}
@@ -34,35 +41,48 @@ function Events({ e }: { e: OutcomeEvents }) {
 export default function OutcomesPanel({ outcomes }: { outcomes: PlayOutcomeView[] }) {
   if (!outcomes.length) return null;
   return (
-    <section className="mb-4 rounded-lg border border-line bg-panel">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
-        <h2 className="text-sm font-semibold">After the play</h2>
-        <Badge title="Each checkpoint compares the account as it was just before the play with the account as of the checkpoint date, through the same rules. Customers act for their own reasons: this shows what changed, not that the play caused it.">
-          measured after · not proof of cause
-        </Badge>
-      </header>
-      <div className="space-y-4 p-4">
+    <Card
+      title="After the play"
+      description="Checked at 7, 14 and 30 days after the first write"
+      icon={Activity}
+      actions={
+        <Tooltip content="Each checkpoint compares the account just before the play with the account on the checkpoint date, through the same rules. Customers act for their own reasons: this shows what changed, not that the play caused it.">
+          <Badge>Measured after · not proof of cause</Badge>
+        </Tooltip>
+      }
+    >
+      <div className="space-y-6">
         {outcomes.map((o) => (
-          <div key={o.change_set_id} className="space-y-2">
-            <div className="text-sm">
-              <span className="font-medium">{label(o.play)}</span>
-              <span className="text-muted"> · executed {date(o.executed_at)} ({o.days_since} days ago)</span>
+          <div key={o.change_set_id}>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <span className="text-[14px] font-semibold text-ink capitalize">{label(o.play)}</span>
+              <span className="text-xs text-muted">Executed {date(o.executed_at)} · {o.days_since} days ago</span>
             </div>
-            <div className="flex flex-wrap gap-1.5">
+            <ol className="relative mt-4 grid grid-cols-3">
+              <span className="absolute top-[7px] right-[16.6%] left-[16.6%] h-px bg-line" aria-hidden />
               {o.checkpoints.map((c) => (
-                <Badge key={c.day} tone={tone[c.result]}
-                  title={c.after && c.before ? `Risk ${c.before.risk} → ${c.after.risk}` : `Measured on ${date(c.due)}`}>
-                  day {c.day} · {c.result === "pending" ? `due ${date(c.due)}` : resultText[c.result]}
-                  {c.after && c.before ? ` · risk ${c.before.risk} → ${c.after.risk}` : ""}
-                </Badge>
+                <li key={c.day} className="relative flex flex-col items-center text-center">
+                  <span className={cn("relative z-10 size-3.5 rounded-full border-2", node[c.result])} />
+                  <span className="mt-2 text-[12.5px] font-medium text-ink">Day {c.day}</span>
+                  <span className="mt-1">
+                    <Badge tone={resultTone[c.result]}>{resultText[c.result]}</Badge>
+                  </span>
+                  <span className="mt-1 text-[11.5px] text-faint">
+                    {c.result === "pending" ? `Due ${date(c.due)}` : c.before && c.after ? `Risk ${c.before.risk} → ${c.after.risk}` : date(c.due)}
+                  </span>
+                </li>
               ))}
-            </div>
+            </ol>
             {o.so_far && (
-              <div className="rounded-md bg-canvas px-3 py-2">
-                <div className="mb-1 text-xs text-muted">
-                  So far (live, not a checkpoint): risk <span className="font-medium text-ink">{o.so_far.before.risk} → {o.so_far.after.risk}</span>
-                  {o.so_far.after.cleared.length > 0 && <> · cleared {o.so_far.after.cleared.map(label).join(", ")}</>}
-                  {o.so_far.after.new.length > 0 && <> · new {o.so_far.after.new.map(label).join(", ")}</>}
+              <div className="mt-5 rounded-xl border border-line bg-subtle p-4">
+                <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+                  <span className="font-medium text-ink">So far</span>
+                  <span className="text-muted">(live, not a checkpoint)</span>
+                  <span className="tabular-nums">
+                    Risk <span className="font-semibold text-ink">{o.so_far.before.risk} → {o.so_far.after.risk}</span>
+                  </span>
+                  {o.so_far.after.cleared.length > 0 && <Badge tone="ok">Cleared {o.so_far.after.cleared.map(label).join(", ")}</Badge>}
+                  {o.so_far.after.new.length > 0 && <Badge tone="risk">New {o.so_far.after.new.map(label).join(", ")}</Badge>}
                 </div>
                 <Events e={o.so_far.after.events} />
               </div>
@@ -70,6 +90,6 @@ export default function OutcomesPanel({ outcomes }: { outcomes: PlayOutcomeView[
           </div>
         ))}
       </div>
-    </section>
+    </Card>
   );
 }

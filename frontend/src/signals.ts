@@ -1,3 +1,19 @@
+import {
+  CalendarClock,
+  CalendarX,
+  CircleArrowUp,
+  Crown,
+  HeartCrack,
+  ListX,
+  MessageSquareOff,
+  TrendingDown,
+  User,
+  UserX,
+  Users,
+  UsersRound,
+  Zap,
+  type LucideIcon,
+} from "lucide-react";
 import type { SignalHit } from "./api";
 
 // Short chip text per signal, built only from the signal's computed facts.
@@ -32,3 +48,40 @@ export function chipText(s: SignalHit): string {
 }
 
 export const polarityTone = { risk: "risk", opportunity: "ok", urgency: "warn", positive: "accent" } as const;
+
+export const signalIcon: Record<string, LucideIcon> = {
+  meeting_gap: CalendarX,
+  champion_silence: MessageSquareOff,
+  champion_departure: UserX,
+  usage_decline: TrendingDown,
+  missing_next_step: ListX,
+  renewal_proximity: CalendarClock,
+  single_threaded: User,
+  executive_engagement: Crown,
+  seat_saturation: Users,
+  new_team_adoption: UsersRound,
+  negative_tone: HeartCrack,
+  upgrade_interest: CircleArrowUp,
+};
+
+export const iconFor = (type: string): LucideIcon => signalIcon[type] ?? Zap;
+
+export const signalName: Record<string, string> = {
+  meeting_gap: "Meeting gap",
+  champion_silence: "Champion silence",
+  champion_departure: "Champion departure",
+  usage_decline: "Usage decline",
+  missing_next_step: "Missing next step",
+  renewal_proximity: "Renewal soon",
+  single_threaded: "Single-threaded",
+  executive_engagement: "Buyer engaged",
+  seat_saturation: "Seat saturation",
+  new_team_adoption: "New team adopting",
+  negative_tone: "Negative tone",
+  upgrade_interest: "Upgrade interest",
+};
+
+export const nameFor = (type: string) => signalName[type] ?? type.replace(/_/g, " ");
+
+// Signals that lower risk when they fire (a lever that "adds" one is good news, not a new risk).
+export const positiveSignals = new Set(["executive_engagement"]);
