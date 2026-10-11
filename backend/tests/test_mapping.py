@@ -156,3 +156,43 @@ def test_mapping_api(client: TestClient) -> None:
     saved = client.put("/api/admin/field-mapping", json=good, headers=CSRF).json()
     assert saved["version"] == 1 and saved["reapply_needed"]
     assert client.post("/api/admin/field-mapping/reapply", json={}, headers=CSRF).json() == {"queued": True}
+
+
+def test_mapping_suggestions_come_from_the_clients_own_crm() -> None:
+    from casefile.api.routers.mapping import suggest
+
+    m = edited(company__renewal_date="contract_renewal_on", deal__won_stages=["999"])
+    clean = validate(m)["hubspot"]
+
+    def props(*items: tuple[str, str, str]) -> list[dict[str, str]]:
+        return [{"name": n, "label": label, "type": t} for n, label, t in items]
+
+    schema = {
+        "companies": ["hs_next_renewal_date", "seats_purchased", "arr", "name"],
+        "companies_details": props(
+            ("hs_next_renewal_date", "Next Renewal Date", "date"),
+            ("renewal_notes", "Renewal notes", "string"),  # right words, wrong type: not suggested
+            ("seats_purchased", "Seats", "number"),
+        ),
+        "contacts": ["hs_buying_role", "employment_status"],
+        "contacts_details": props(("hs_buying_role", "Buying Role", "enumeration")),
+        "deals": [],
+        "deals_details": [],
+        "deal_stages": ["won1", "lost1", "open1", *clean["deal"]["lost_stages"]],
+        "deal_stages_details": [
+            {"id": "won1", "label": "Renewed", "pipeline": "Renewals", "closed": True, "probability": 1.0},
+            {"id": "lost1", "label": "Churned", "pipeline": "Renewals", "closed": True, "probability": 0.0},
+            {
+                "id": "open1",
+                "label": "Negotiating",
+                "pipeline": "Renewals",
+                "closed": False,
+                "probability": 0.5,
+            },
+        ],
+    }
+    out = suggest(clean, schema)
+    assert out["company.renewal_date"] == [{"name": "hs_next_renewal_date", "label": "Next Renewal Date"}]
+    assert out["deal.won_stages"] == [{"name": "won1", "label": "Renewals: Renewed"}]
+    assert "deal.lost_stages" not in out  # the mapped lost stages exist in this CRM: nothing to suggest
+    assert "company.seats_purchased" not in out and "contact.role_property" not in out

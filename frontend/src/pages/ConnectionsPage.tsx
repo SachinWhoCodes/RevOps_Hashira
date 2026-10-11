@@ -56,10 +56,10 @@ function HubSpotReadGuide() {
     <>
       <p>Casefile reads companies, contacts, deals and the emails, meetings, notes, tasks and calls logged on them. It needs a HubSpot app with <b>read</b> permissions only.</p>
       <Steps>
-        <Step>In HubSpot open <b>Settings</b> (gear icon) → <b>Integrations</b> → <b>Private Apps</b>. In newer accounts: <b>Development</b> → <b>Legacy apps</b> → <b>Create</b> → <b>Private</b>. You need to be a super admin.</Step>
-        <Step>Name the app <b>Casefile (read)</b>.</Step>
-        <Step>On the <b>Scopes</b> tab tick only <Code>crm.objects.companies.read</Code> <Code>crm.objects.contacts.read</Code> <Code>crm.objects.deals.read</Code> <Code>crm.objects.owners.read</Code>, and optionally <Code>sales-email-read</Code> so logged emails can be read.</Step>
-        <Step>Click <b>Create app</b>, then <b>Show token</b> and copy it (it starts with <Code>pat-</Code>).</Step>
+        <Step>In HubSpot open <b>Development</b> → <b>Keys</b> → <b>Service Keys</b> → <b>Create service key</b>. (Older accounts: <b>Settings</b> → <b>Integrations</b> → <b>Private Apps</b>.) You need to be a super admin.</Step>
+        <Step>Name it <b>casefile-read</b>.</Step>
+        <Step>Add only these scopes: <Code>crm.objects.companies.read</Code> <Code>crm.objects.contacts.read</Code> <Code>crm.objects.deals.read</Code> <Code>crm.objects.owners.read</Code>, and optionally <Code>sales-email-read</Code> so logged emails can be read.</Step>
+        <Step>Create it, then <b>Show</b> and copy the key (it starts with <Code>pat-</Code>).</Step>
         <Step>Paste it here and press <b>Check and connect</b>.</Step>
       </Steps>
       <Note>Casefile checks the token for real before saving: it reads your portal id, asks for one record id of each kind (nothing is kept), and refuses a token that can also change records. The token is stored encrypted and never shown again.</Note>
@@ -72,10 +72,11 @@ function HubSpotWriteGuide() {
     <>
       <p>Approved actions create a task or a note on the deal and update the deal's next step. That needs a <b>second</b> app, so the part of Casefile that reads your data never holds write access.</p>
       <Steps>
-        <Step>Create another private app the same way, named <b>Casefile (write)</b>.</Step>
-        <Step>On <b>Scopes</b> tick <Code>crm.objects.deals.write</Code>. HubSpot accepts it for creating tasks and notes and updating deals; nothing else is needed.</Step>
-        <Step>Create the app, copy its token (<Code>pat-…</Code>) and paste it here.</Step>
+        <Step>Create a second service key the same way, named <b>casefile-write</b>.</Step>
+        <Step>Add the scope <Code>crm.objects.deals.write</Code>. That is enough: Casefile attaches approved tasks and notes to the customer's renewal deal (HubSpot shows the deal on the company) and updates the deal's next step.</Step>
+        <Step>Create it, copy the key (<Code>pat-…</Code>) and paste it here.</Step>
       </Steps>
+      <Note>Why not attach to the company too? HubSpot only lets a key link a record to a company if the key may also <i>change</i> companies (<Code>crm.objects.companies.write</Code>). Casefile does not ask for that. Add it only if you want actions filed on companies that have no deal.</Note>
       <Note>The check sends empty batches (zero records), so nothing is created; HubSpot answers whether the token may create tasks and notes and update deals. The token is then sealed so only Casefile's executor can open it, and nothing is written until you switch to live mode and someone approves a line.</Note>
     </>
   );
@@ -137,15 +138,22 @@ function SlackGuide({ onCopy, copied }: { onCopy: () => void; copied: boolean })
 
 // ---------------------------------------------------------------- building blocks
 
-function ConnLine({ c, onDisconnect }: { c: ConnView; onDisconnect?: () => void }) {
+// Which part of a tool this row is: Gmail and Calendar share one sign-in, so name them.
+function connTitle(c: ConnView): string {
+  if (c.kind === "gmail") return c.zone === "write" ? "Gmail drafts" : "Gmail";
+  if (c.kind === "gcal") return "Calendar";
+  return c.zone === "write" ? "Write" : "Read";
+}
+
+function ConnLine({ c, onDisconnect, onReconnect }: { c: ConnView; onDisconnect?: () => void; onReconnect?: () => void }) {
   const ex = c.executor;
-  const error = ex?.error ?? c.last_error;
+  const error = c.problem ?? ex?.error ?? c.last_error;
   return (
     <div className="flex items-start gap-3 rounded-xl border border-line bg-subtle px-3.5 py-3">
       <StatusDot tone={error ? "risk" : c.zone === "write" ? (ex?.ready ? "ok" : ex?.seen ? "risk" : "neutral") : c.last_success_at ? "ok" : "warn"} className="mt-1.5" />
       <div className="min-w-0 flex-1 text-[13px]">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="font-medium text-ink">{c.zone === "write" ? "Write" : "Read"} · {c.name}</span>
+          <span className="font-medium text-ink">{connTitle(c)} · {c.name}</span>
           {typeof c.config.portal_id === "string" && <span className="text-faint">portal {c.config.portal_id}</span>}
           {typeof c.config.team === "string" && <span className="text-faint">workspace {c.config.team}</span>}
           {typeof c.config.mailbox === "string" && c.config.mailbox !== c.name && <span className="text-faint">{c.config.mailbox}</span>}
@@ -161,6 +169,9 @@ function ConnLine({ c, onDisconnect }: { c: ConnView; onDisconnect?: () => void 
           {typeof c.config.linked_users === "number" && <span className="text-xs text-muted">{c.config.linked_users} team members matched</span>}
         </div>
         {error && <div className="mt-1.5 text-xs text-risk-fg">{error}</div>}
+        {c.needs_reconnect && onReconnect && (
+          <Button size="sm" variant="primary" className="mt-2" onClick={onReconnect}>Reconnect</Button>
+        )}
       </div>
       {onDisconnect && (
         <Tooltip content="Disconnect: Casefile forgets the credential; synced data is kept">
@@ -411,11 +422,11 @@ export default function ConnectionsPage() {
                 <div className="space-y-2">
                   {o.google.mailboxes.map((m) => (
                     <div key={m.mailbox} className="space-y-2">
-                      {m.gmail && <ConnLine c={m.gmail} onDisconnect={() => m.gmail && disconnect(m.gmail)} />}
-                      {m.calendar && <ConnLine c={m.calendar} />}
+                      {m.gmail && <ConnLine c={m.gmail} onDisconnect={() => m.gmail && disconnect(m.gmail)} onReconnect={() => google.mutate("read")} />}
+                      {m.calendar && <ConnLine c={m.calendar} onReconnect={m.gmail?.needs_reconnect ? undefined : () => google.mutate("read")} />}
                     </div>
                   ))}
-                  {o.google.drafts.map((c) => <ConnLine key={c.id} c={c} onDisconnect={() => disconnect(c)} />)}
+                  {o.google.drafts.map((c) => <ConnLine key={c.id} c={c} onDisconnect={() => disconnect(c)} onReconnect={() => google.mutate("drafts")} />)}
                 </div>
               )}
               <div className="flex flex-wrap gap-2">

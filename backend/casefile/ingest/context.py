@@ -26,6 +26,7 @@ class NormalizeContext:
     _owners: dict[str, uuid.UUID | None] = field(default_factory=dict)
     _contacts: dict[tuple[str, str], tuple[uuid.UUID, str] | None] = field(default_factory=dict)
     _history: list[dict[str, Any]] = field(default_factory=list)
+    _own: set[str] | None = None
 
     def __post_init__(self) -> None:
         if not self.mapping:
@@ -40,6 +41,20 @@ class NormalizeContext:
     @property
     def internal_domains(self) -> set[str]:
         return {d.lower() for d in self.org.internal_domains}
+
+    @property
+    def internal_addresses(self) -> set[str]:
+        """Our own addresses (users, connected mailboxes), computed once per sync."""
+        if self._own is None:
+            from casefile.ingest.util import own_addresses
+
+            self._own = own_addresses(self.session, self.org_id)
+        return self._own
+
+    def is_internal(self, address: str) -> bool:
+        from casefile.ingest.util import is_ours
+
+        return is_ours(address, self.internal_domains, self.internal_addresses)
 
     def now(self) -> datetime:
         return datetime.now(UTC)

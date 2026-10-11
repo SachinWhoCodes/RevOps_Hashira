@@ -499,8 +499,28 @@ def disconnect(session: Session, org: Org, user: AppUser, connection_id: uuid.UU
         )
 
 
+GOOGLE_EXPIRED = ("invalid_grant", "token refresh failed", "Token has been expired or revoked")
+
+
+def problem(conn: Connection) -> tuple[str | None, bool]:
+    """(plain-language problem, whether reconnecting fixes it) for a connection's last error."""
+    err = f"{conn.last_error or ''} {(conn.cursor or {}).get('error') or ''}".strip()
+    if not err:
+        return None, False
+    if conn.kind in (ConnectionKind.gmail, ConnectionKind.gcal) and any(m in err for m in GOOGLE_EXPIRED):
+        return (
+            "Google access expired or was removed (while Casefile's Google app is in testing, a connection "
+            "lasts 7 days). Reconnect to resume; nothing synced so far is lost.",
+            True,
+        )
+    if "401" in err or "invalid_auth" in err or "did not accept" in err:
+        return "The tool no longer accepts this credential (revoked or rotated). Paste a new one.", False
+    return None, False
+
+
 def _view(conn: Connection, now: datetime) -> dict[str, Any]:
     cursor = conn.cursor or {}
+    friendly, reconnect = problem(conn)
     beat = cursor.get("heartbeat")
     fresh = bool(beat and now - datetime.fromisoformat(beat) <= HEARTBEAT_FRESH)
     return {
@@ -520,6 +540,8 @@ def _view(conn: Connection, now: datetime) -> dict[str, Any]:
         else "none",
         "last_success_at": conn.last_success_at.isoformat() if conn.last_success_at else None,
         "last_error": conn.last_error,
+        "problem": friendly,
+        "needs_reconnect": reconnect,
         # Write connections: what the executor reported on its last heartbeat (it alone can open them).
         "executor": None
         if conn.zone != Zone.write

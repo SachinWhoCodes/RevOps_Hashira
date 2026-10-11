@@ -422,15 +422,15 @@ def init_executor_keys(
 @app.command("set-secret")
 def set_secret(
     key: str = typer.Argument(..., help="e.g. BREVO_API_KEY"),
-    file: str = typer.Option(".env", help=".env, .env.executor or .env.slackbot"),
+    file: str = typer.Option(".env", help=".env, .env.executor, .env.slackbot or .env.seed"),
 ) -> None:
     """Store a secret in an env file without it appearing on screen or in shell history (hidden prompt)."""
     import re
 
     if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", key):
         raise typer.BadParameter("KEY must be UPPER_SNAKE_CASE")
-    if file not in {".env", ".env.executor", ".env.slackbot"}:
-        raise typer.BadParameter("file must be .env, .env.executor or .env.slackbot")
+    if file not in {".env", ".env.executor", ".env.slackbot", ".env.seed"}:
+        raise typer.BadParameter("file must be .env, .env.executor, .env.slackbot or .env.seed")
     value = typer.prompt(f"{key}", hide_input=True).strip()
     if not value or "\n" in value:
         raise typer.BadParameter("empty value")
@@ -467,6 +467,100 @@ def set_ai_cap(
             details={"from": before, "to": usd},
         )
     typer.echo(f"{org}: daily AI cap ${usd:.2f}")
+
+
+@app.command("generate-usage")
+def generate_usage(
+    org: str = typer.Option(..., help="Organisation slug (its CRM companies become the usage keys)"),
+    out: Path = typer.Option(REPO_ROOT / "data" / "usage", help="Folder for the CSV"),
+    days: int = typer.Option(400, help="Days of history"),
+    customer: list[str] = typer.Option(
+        None, help="Company names to treat as customers first (repeatable), e.g. before deals exist"
+    ),
+) -> None:
+    """Write a generated product-usage CSV for an organisation's own CRM companies (a hosting control
+    panel: active users, deployments, seats, teams), one usage story per company. Upload it on the
+    Setup page. Generated numbers: never present them as a customer's real usage."""
+    from sqlalchemy import exists
+
+    from casefile.db.models import Account, Deal, Org
+    from casefile.db.session import session_scope
+    from casefile.synth.usage_stories import STORY_TEXT, Company, generate, write_csv
+
+    with session_scope() as session:
+        row = session.scalar(select(Org).where(Org.slug == org))
+        if row is None:
+            raise typer.BadParameter(f"organisation {org!r} not found")
+        companies = [
+            Company(a.name, a.domains[0].lower(), bool(has_deal))
+            for a, has_deal in session.execute(
+                select(Account, exists().where(Deal.account_id == Account.id))
+                .where(Account.org_id == row.id)
+                .order_by(Account.name)
+            )
+            if a.domains
+        ]
+    chosen = [n.lower() for n in customer or []]
+    companies = sorted(
+        (Company(c.name, c.key, c.customer or c.name.lower() in chosen) for c in companies),
+        key=lambda c: chosen.index(c.name.lower()) if c.name.lower() in chosen else len(chosen),
+    )
+    rows, stories = generate(companies, date.today(), days=days)
+    path = out / f"{org}-product-usage.csv"
+    write_csv(rows, path)
+    typer.echo(
+        f"{len(rows):,} rows, {len(companies)} companies (+1 product customer missing from the CRM) -> {path}"
+    )
+    for c in companies:
+        typer.echo(
+            f"  {'customer' if c.customer else 'no deal ':8}  {c.name[:38]:38} {STORY_TEXT[stories[c.key]]}"
+        )
+
+
+@app.command("delete-org")
+def delete_org_cmd(
+    slug: str = typer.Option(..., help="Organisation to delete"),
+    confirm: str = typer.Option(..., help="Type the slug again to confirm"),
+    reason: str = typer.Option("", help="Why (kept on the receipt), e.g. 'client asked after the demo'"),
+    allow_demo: bool = typer.Option(False, help="Allow deleting this server's demo organisation (ORG_SLUG)."),
+) -> None:
+    """Delete everything one organisation has in Casefile, leaving a receipt (counts and the final hash
+    of its audit chain; no names or content). Needs the database owner. Cannot be undone."""
+    from casefile.db.session import session_scope
+    from casefile.deletion import DeletionError, delete_org
+
+    if confirm != slug:
+        raise typer.BadParameter("--confirm must repeat the slug exactly")
+    try:
+        with session_scope() as session:
+            out = delete_org(
+                session, slug, deleted_by="cli:delete-org", reason=reason or None, allow_demo=allow_demo
+            )
+    except DeletionError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(out, indent=2))
+
+
+@app.command("list-orgs")
+def list_orgs() -> None:
+    """Organisations on this server: slug, mode, users, accounts, connections (no secrets)."""
+    from sqlalchemy import func
+
+    from casefile.db.models import Account, AppUser, Connection, Org
+    from casefile.db.session import session_scope
+    from casefile.onboarding import org_mode
+
+    def count(session: Any, model: Any, org_id: Any) -> int:
+        return int(session.scalar(select(func.count()).select_from(model).where(model.org_id == org_id)) or 0)
+
+    with session_scope() as session:
+        for org in session.scalars(select(Org).order_by(Org.created_at)):
+            typer.echo(
+                f"{org.slug:28} {org_mode(org):7} users={count(session, AppUser, org.id):<4} "
+                f"accounts={count(session, Account, org.id):<5} "
+                f"connections={count(session, Connection, org.id):<3} "
+                f"created={org.created_at:%Y-%m-%d}"
+            )
 
 
 @app.command("create-org")

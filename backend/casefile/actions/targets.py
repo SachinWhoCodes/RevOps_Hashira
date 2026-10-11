@@ -111,8 +111,12 @@ def hubspot_target(
         return HubSpotTarget(company, deal_id, owner_id, True, problem)
     if account.crm_source != "hubspot":
         return HubSpotTarget(None, None, None, False, f"account comes from {account.crm_source}, not HubSpot")
+    # Least privilege: linking a task or note to a company needs *write* access on companies (HubSpot
+    # refuses with USER_DOES_NOT_HAVE_PERMISSION otherwise — observed 2026-10-11 on a real portal), so a
+    # deal-write key attaches to the deal, which HubSpot already links to the company. Only an account
+    # without a deal falls back to the company (that needs crm.objects.companies.write).
     return HubSpotTarget(
-        account.crm_id,
+        None if deal else account.crm_id,
         deal.crm_id if deal else None,
         account.crm_owner_id or (owner.crm_owner_id if owner else None),
         False,

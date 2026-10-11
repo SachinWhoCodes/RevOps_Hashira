@@ -167,10 +167,15 @@ def recompute_account(
     snap = AccountHistory.load(session, account_id).as_of(now)
     result = RecomputeResult(account_id, "assessed")
 
-    if snap is None or snap.is_churned():
+    no_deal = session.scalar(select(Deal.id).where(Deal.account_id == account_id).limit(1)) is None
+    if snap is None or snap.is_churned() or no_deal:
+        # No deal: a prospect, a vendor, or a company the CRM created from an email — not a customer to watch.
+        reason = (
+            "auto: not a customer (no deal in the CRM)" if no_deal else "auto: account inactive or churned"
+        )
         for kind in CaseKind:
             if (case := _open_case(session, account_id, kind)) is not None:
-                _resolve(session, case, "auto: account inactive or churned", now)
+                _resolve(session, case, reason, now)
                 result.resolved.append(kind.value)
         result.status = "inactive"
         return result

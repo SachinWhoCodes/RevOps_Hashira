@@ -285,7 +285,7 @@ def test_a_read_token_that_can_write_is_refused(db: Session, keys: ExecutorSetti
 
     org, admin = company(db)
     with pytest.raises(ob.OnboardingError, match="can also change records"):
-        ob.connect_hubspot(db, org, admin, "pat-na1-read-token", live=FakeLive(writes=True))  # type: ignore[arg-type]
+        ob.connect_hubspot(db, org, admin, "fake-read-token-for-tests", live=FakeLive(writes=True))  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------- Slack
@@ -589,3 +589,83 @@ def test_disconnect_forgets_the_credential(db: Session, keys: ExecutorSettings) 
     assert conn.secret_sealed is None and conn.status.value == "disabled"
     with pytest.raises(cx.ConnectError):
         cx.disconnect(db, org, admin, uuid.uuid4())
+
+
+def test_an_expired_google_grant_asks_for_reconnect_and_the_executor_notices(
+    db: Session, keys: ExecutorSettings
+) -> None:
+    from casefile.connectors.base import AuthError as GoogleAuthError
+
+    org, _ = company(db, "expiry")
+    read = ensure_connection(db, org, ConnectionKind.gmail, name="sales@expiry.test")
+    read.last_error = "google token refresh failed: 400 {'error': 'invalid_grant'}"
+    friendly, reconnect = cx.problem(read)
+    assert reconnect and friendly is not None and "Reconnect" in friendly
+    assert cx.problem(ensure_connection(db, org, ConnectionKind.hubspot, name="crm")) == (None, False)
+    drafts = ensure_connection(db, org, ConnectionKind.gmail, name="drafts", zone=Zone.write)
+    drafts.secret_sealed = seal_for_executor(
+        json.dumps({"client_id": "c", "client_secret": "s", "refresh_token": "r"})
+    )
+    db.flush()
+    tenants = Tenants(db, keys)
+    ws = tenants.writers(org)
+    assert "gmail" in ws.writers and drafts.id in ws.checks
+
+    def expired() -> object:
+        raise GoogleAuthError("google token refresh failed: 400 invalid_grant")
+
+    ws.checks[drafts.id] = expired
+    tenants.heartbeat(org, shadow=False)
+    assert drafts.cursor["writer"] is False and "invalid_grant" in drafts.cursor["error"]
+    view = next(v for v in cx.overview(db, org)["google"]["drafts"])
+    assert view["needs_reconnect"] and view["executor"]["ready"] is False
+
+
+def test_only_companies_with_a_deal_are_watched(db: Session) -> None:
+    """A CRM also holds prospects, vendors and companies it created from newsletters: no deal, not a
+    customer — not scored, and their mail is never searched for."""
+    from casefile.cases.service import RecomputeContext, recompute_account
+    from casefile.connectors.registry import DbReaderContext
+    from casefile.db.models import Account, Contact, Deal
+
+    org, _ = company(db, "watch", permitted=False)
+    newsletter = Account(
+        org_id=org.id, crm_source="t", crm_id="n", name="Newsletter Co", domains=["news.test"]
+    )
+    customer = Account(org_id=org.id, crm_source="t", crm_id="c", name="Customer Co", domains=["cust.test"])
+    db.add_all([newsletter, customer])
+    db.flush()
+    db.add_all(
+        [
+            Contact(org_id=org.id, account_id=newsletter.id, email="digest@news.test", name="Digest"),
+            Contact(org_id=org.id, account_id=customer.id, email="dana@cust.test", name="Dana"),
+            Deal(org_id=org.id, account_id=customer.id, crm_source="t", crm_id="d1", name="Renewal"),
+        ]
+    )
+    db.flush()
+    ctx = DbReaderContext(db, org)
+    assert ctx.customer_domains() == {"cust.test"} and ctx.known_emails() == {"dana@cust.test"}
+    result = recompute_account(db, newsletter.id, RecomputeContext.build(db, org))
+    assert result.status == "inactive"
+
+
+def test_tasks_and_notes_attach_to_the_deal_so_a_deal_write_key_is_enough(db: Session) -> None:
+    """Linking to a company needs company *write* access in HubSpot (observed): with a deal, attach
+    there only; an account without a deal falls back to the company."""
+    from casefile.actions.targets import hubspot_target
+    from casefile.db.models import Account, Deal
+
+    org, _ = company(db, "targets", permitted=False)
+    ensure_connection(
+        db, org, ConnectionKind.hubspot, name="crm", zone=Zone.write, config={"id_source": "crm_id"}
+    )
+    acc = Account(org_id=org.id, crm_source="hubspot", crm_id="111", name="Acme", domains=["acme.test"])
+    db.add(acc)
+    db.flush()
+    deal = Deal(org_id=org.id, account_id=acc.id, crm_source="hubspot", crm_id="222", name="Renewal")
+    db.add(deal)
+    db.flush()
+    with_deal = hubspot_target(db, acc, deal, None)
+    assert (with_deal.company, with_deal.deal) == (None, "222")
+    without = hubspot_target(db, acc, None, None)
+    assert (without.company, without.deal) == ("111", None)

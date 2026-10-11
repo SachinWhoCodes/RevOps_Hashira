@@ -37,7 +37,14 @@ from casefile.db.models import (
     Org,
     UsageDaily,
 )
-from casefile.ingest.util import FREEMAIL_DOMAINS, chunks, email_domain, is_system_address
+from casefile.ingest.util import (
+    FREEMAIL_DOMAINS,
+    chunks,
+    email_domain,
+    is_ours,
+    is_system_address,
+    own_addresses,
+)
 
 UNRESOLVED = (MatchMethod.unmatched, MatchMethod.ambiguous)
 SKIP_METHODS = (MatchMethod.crm_association, MatchMethod.internal_only)
@@ -64,6 +71,7 @@ class ResolveResult:
 class IdentityIndex:
     def __init__(self, session: Session, org: Org) -> None:
         self.internal = {d.lower() for d in org.internal_domains}
+        self.own = own_addresses(session, org.id)  # staff and connected mailboxes on personal domains
         self.domain_accounts: dict[str, set[uuid.UUID]] = {}
         self.crm_accounts: dict[str, uuid.UUID] = {}
         for acc_id, domains, crm_id in session.execute(
@@ -92,7 +100,7 @@ class IdentityIndex:
     # ---------------------------------------------------------------- helpers
 
     def is_internal(self, email: str) -> bool:
-        return email_domain(email) in self.internal
+        return is_ours(email, self.internal, self.own)
 
     def accounts_for_domain(self, domain: str) -> set[uuid.UUID]:
         """Exact domain, then parent domains (eu.globex.test → globex.test). Never free-mail."""

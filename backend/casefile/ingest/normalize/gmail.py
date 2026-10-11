@@ -21,7 +21,7 @@ from casefile.connectors.base import RawItem
 from casefile.db.models import Activity, ActivityType, Direction, MatchMethod
 from casefile.ingest.context import NormalizeContext
 from casefile.ingest.text import html_to_text, snippet, strip_zero_width
-from casefile.ingest.util import chunks, email_domain, is_system_address, parse_ts
+from casefile.ingest.util import chunks, is_ours, is_system_address, parse_ts
 
 SOURCE = "gmail"
 BODY_RETENTION = timedelta(days=90)
@@ -60,7 +60,11 @@ def _addresses(value: str | None) -> list[str]:
     return [addr.lower() for _, addr in getaddresses([value or ""]) if "@" in addr]
 
 
-def parse_message(raw: dict[str, Any], internal_domains: set[str]) -> dict[str, Any] | None:
+def parse_message(
+    raw: dict[str, Any],
+    internal_domains: set[str],
+    internal_addresses: set[str] | frozenset[str] = frozenset(),
+) -> dict[str, Any] | None:
     payload = raw.get("payload") or {}
     hdr = _headers(payload)
     sent_at = parse_ts(raw.get("internalDate")) or parse_ts(hdr.get("date"))
@@ -88,8 +92,11 @@ def parse_message(raw: dict[str, Any], internal_domains: set[str]) -> dict[str, 
         if failed is None and (m := FAILED_RECIPIENT.search(body)):
             failed = m.group(1).lower()
 
+    mailbox_owner = str((raw.get("_casefile") or {}).get("mailbox", "")).lower()
+    ours = {*internal_addresses, mailbox_owner} - {""}
+
     def internal(addr: str) -> bool:
-        return email_domain(addr) in internal_domains
+        return is_ours(addr, internal_domains, ours)
 
     if is_bounce:
         participants = [failed] if failed else []
@@ -146,7 +153,7 @@ def messages(ctx: NormalizeContext, items: list[RawItem]) -> None:
     purge_after = ctx.now() + BODY_RETENTION
     rows = []
     for item in items:
-        parsed = parse_message(item.payload, internal)
+        parsed = parse_message(item.payload, internal, ctx.internal_addresses)
         if parsed is None:
             continue
         if parsed["direction"] == Direction.internal:

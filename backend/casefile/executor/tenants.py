@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -37,6 +38,9 @@ class WriterSet:
     writers: dict[str, Writer]
     errors: dict[uuid.UUID, str] = field(default_factory=dict)  # per write connection, for the heartbeat
     fingerprint: str = ""
+    # Cheap live checks run on each heartbeat (a Google grant can expire or be revoked at any time;
+    # the access token is cached for an hour, so this reaches Google about once an hour).
+    checks: dict[uuid.UUID, Callable[[], object]] = field(default_factory=dict)
 
 
 def write_connections(session: Session, org_id: uuid.UUID) -> list[Connection]:
@@ -123,6 +127,7 @@ def build_writer_set(session: Session, org: Org, settings: ExecutorSettings) -> 
                         settings.google_client_id, settings.google_client_secret.get_secret_value(), secret
                     )
                 out.writers["gmail"] = GmailDraftWriter(token)
+                out.checks[conn.id] = token.get
         except (UnsealError, ValueError, KeyError) as exc:
             out.errors[conn.id] = str(exc)[:300]
     return out
@@ -150,13 +155,16 @@ class Tenants:
         ws = self.writers(org)
         now = datetime.now(UTC).isoformat()
         for conn in write_connections(self.session, org.id):
-            cursor: dict[str, Any] = {
-                "heartbeat": now,
-                "shadow": shadow,
-                "writer": conn.kind.value in ws.writers,
-            }
-            if conn.id in ws.errors:
-                cursor["error"] = ws.errors[conn.id]
+            usable = conn.kind.value in ws.writers
+            error = ws.errors.get(conn.id)
+            if conn.id in ws.checks:
+                try:
+                    ws.checks[conn.id]()
+                except AuthError as exc:
+                    usable, error = False, str(exc)[:300]
+            cursor: dict[str, Any] = {"heartbeat": now, "shadow": shadow, "writer": usable}
+            if error:
+                cursor["error"] = error
             conn.cursor = cursor
             conn.last_success_at = datetime.now(UTC)
         self.session.commit()

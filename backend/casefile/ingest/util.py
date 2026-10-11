@@ -101,3 +101,29 @@ def chunks[T](items: Iterable[T], size: int) -> Iterator[list[T]]:
 @lru_cache
 def field_mapping() -> dict[str, Any]:
     return yaml.safe_load((Path(__file__).parent / "field_mapping.yaml").read_text())
+
+
+def is_ours(address: str, domains: set[str], addresses: set[str] | frozenset[str] = frozenset()) -> bool:
+    """Our side of a conversation: an address at one of our email domains, or one of our own
+    addresses (staff logins, connected mailboxes). The second matters when the team uses personal
+    mailboxes (gmail.com), which can never be a company domain."""
+    address = address.lower()
+    return address in addresses or email_domain(address) in domains
+
+
+def own_addresses(session: Any, org_id: Any) -> set[str]:
+    """The organisation's own addresses: its users' emails and every mailbox it connected."""
+    from sqlalchemy import select
+
+    from casefile.db.models import AppUser, Connection, ConnectionKind
+
+    users = {e.lower() for e in session.scalars(select(AppUser.email).where(AppUser.org_id == org_id))}
+    mailboxes = {
+        str((cfg or {}).get("mailbox", "")).lower()
+        for cfg in session.scalars(
+            select(Connection.config).where(
+                Connection.org_id == org_id, Connection.kind.in_([ConnectionKind.gmail, ConnectionKind.gcal])
+            )
+        )
+    }
+    return (users | mailboxes) - {""}

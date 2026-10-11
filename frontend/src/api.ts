@@ -664,6 +664,8 @@ export type ConnView = {
   credential: "sealed for the executor" | "encrypted" | "server environment" | "none";
   last_success_at: string | null;
   last_error: string | null;
+  problem: string | null; // the last error in plain language, when Casefile recognises it
+  needs_reconnect: boolean; // e.g. a Google grant that expired: signing in again fixes it
   executor: { seen: boolean; ready: boolean; error?: string | null } | null;
 };
 export type ConnectOverview = {

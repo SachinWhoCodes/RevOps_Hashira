@@ -69,11 +69,27 @@ def _portal(db: Session, org: Org) -> str | None:
     return (conn.config or {}).get("portal_id") if conn else None
 
 
-def _links(item: ChangeItem, portal: str | None) -> dict[str, str]:
+def _company_record(db: Session, item: ChangeItem) -> str | None:
+    """The HubSpot company a line concerns, for a link people can open. Tasks and notes now attach to
+    the deal only (least privilege), so the company comes from the account when it came from HubSpot."""
+    ref = item.target_ref or {}
+    if ref.get("company"):
+        return str(ref["company"])
+    account = db.scalar(
+        select(Account)
+        .join(AccountCase, AccountCase.account_id == Account.id)
+        .join(ChangeSet, ChangeSet.case_id == AccountCase.id)
+        .where(ChangeSet.id == item.change_set_id)
+    )
+    return account.crm_id if account is not None and account.crm_source == "hubspot" else None
+
+
+def _links(item: ChangeItem, portal: str | None, company: str | None = None) -> dict[str, str]:
     ref, out = item.target_ref or {}, {}
+    company = company or ref.get("company")
     if item.target_system == "hubspot" and portal:
-        if ref.get("company"):
-            out["company"] = f"https://app.hubspot.com/contacts/{portal}/record/0-2/{ref['company']}"
+        if company:
+            out["company"] = f"https://app.hubspot.com/contacts/{portal}/record/0-2/{company}"
         if ref.get("deal"):
             out["deal"] = f"https://app.hubspot.com/contacts/{portal}/record/0-3/{ref['deal']}"
     if item.target_system == "gmail":
@@ -111,7 +127,7 @@ def item_view(db: Session, item: ChangeItem, portal: str | None) -> dict[str, An
         "why": item.why,
         "evidence_count": len(item.evidence_ids or []),
         "payload_hash": item.payload_hash,
-        "links": _links(item, portal),
+        "links": _links(item, portal, _company_record(db, item) if item.target_system == "hubspot" else None),
         "approvals": [
             {
                 "decision": a.decision.value,

@@ -6,6 +6,7 @@ Uses the read token only. The planner records what it read as the change's ``bef
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import httpx
 from sqlalchemy import select
@@ -32,14 +33,38 @@ class HubSpotLive:
     def schema(self) -> dict[str, list[str]]:
         """Property names per object, and deal stage ids across pipelines: the CRM's *schema*, used
         to check a field mapping. Reads no records."""
-        out: dict[str, list[str]] = {}
+        return {k: v for k, v in self.schema_details().items() if not k.endswith("_details")}
+
+    def schema_details(self) -> dict[str, Any]:
+        """Like ``schema`` plus each property's label and type, and each deal stage's pipeline, label,
+        closed flag and probability — what is needed to *suggest* a mapping. Still no records."""
+        out: dict[str, Any] = {}
         for obj in ("companies", "contacts", "deals"):
             data = self.source.request("GET", f"/crm/v3/properties/{obj}")
-            out[obj] = sorted(p["name"] for p in data.get("results", []))
+            results = data.get("results", [])
+            out[obj] = sorted(p["name"] for p in results)
+            out[f"{obj}_details"] = [
+                {"name": p["name"], "label": p.get("label") or "", "type": p.get("type") or ""}
+                for p in results
+            ]
         pipelines = self.source.request("GET", "/crm/v3/pipelines/deals")
-        out["deal_stages"] = sorted(
-            {s["id"] for pl in pipelines.get("results", []) for s in pl.get("stages", [])}
-        )
+        stages = []
+        for pl in pipelines.get("results", []):
+            for st in pl.get("stages", []):
+                meta = st.get("metadata") or {}
+                stages.append(
+                    {
+                        "id": st["id"],
+                        "label": st.get("label") or "",
+                        "pipeline": pl.get("label") or "",
+                        "closed": str(meta.get("isClosed", "")).lower() == "true",
+                        "probability": float(meta["probability"])
+                        if meta.get("probability") not in (None, "")
+                        else None,
+                    }
+                )
+        out["deal_stages"] = sorted({s["id"] for s in stages})
+        out["deal_stages_details"] = stages
         return out
 
     def account(self) -> dict[str, object]:

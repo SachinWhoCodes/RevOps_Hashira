@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
 from casefile.audit.log import append as audit
@@ -550,7 +550,26 @@ def _data_counts(session: Session, org: Org) -> dict[str, Any]:
     activities = count(Activity)
     return {
         "accounts": accounts,
-        "accounts_with_renewal_date": count(Account, Account.renewal_date.is_not(None)),
+        # Only companies with a deal are customers Casefile watches (cases.service, connectors.registry).
+        "customers": int(
+            session.scalar(
+                select(func.count(func.distinct(Deal.account_id))).where(
+                    Deal.org_id == org.id, Deal.account_id.is_not(None)
+                )
+            )
+            or 0
+        ),
+        # A renewal date comes from the company field or, when the CRM has none, the open renewal deal.
+        "accounts_with_renewal_date": count(
+            Account,
+            Account.renewal_date.is_not(None)
+            | exists().where(
+                Deal.account_id == Account.id,
+                Deal.deal_type == DealType.renewal,
+                Deal.close_date.is_not(None),
+                Deal.close_date >= func.current_date(),
+            ),
+        ),
         "accounts_with_owner": count(Account, Account.owner_user_id.is_not(None)),
         "accounts_with_recorded_champion": with_champion,
         "contacts": count(Contact),
@@ -707,19 +726,24 @@ def status(session: Session, org: Org) -> dict[str, Any]:
 
     data_warnings = []
     if synced and counts["accounts"] == 0:
+        data_warnings.append("No companies were found. Check the company properties in the field mapping.")
+    if synced and counts["accounts"] and counts["customers"] == 0:
         data_warnings.append(
-            "No customer companies were found. Check the company properties in the field mapping."
+            f"None of your {counts['accounts']} companies has a deal yet. Casefile watches customers only: a "
+            "company counts once it has a deal (for a renewal, deal type 'Existing Business'). Companies the "
+            "CRM created from whoever emailed you are ignored until then."
         )
     if synced and counts["accounts"] and counts["renewal_deals"] == 0:
         data_warnings.append(
             "No renewal deals were found, so the back-test has nothing to learn from. Check the deal type "
             "values in the field mapping."
         )
-    if counts["accounts"] and counts["accounts_with_renewal_date"] < counts["accounts"] / 2:
-        data_warnings.append("Fewer than half of the companies have a renewal date.")
-    if counts["accounts"] and counts["accounts_with_recorded_champion"] < counts["accounts"] / 2:
+    watched = counts["customers"]  # warnings are about the customers Casefile watches, not every company
+    if watched and counts["accounts_with_renewal_date"] < watched / 2:
+        data_warnings.append("Fewer than half of the customers have a renewal date.")
+    if watched and counts["accounts_with_recorded_champion"] < watched / 2:
         data_warnings.append(
-            "Fewer than half of the companies have a champion recorded; Casefile will infer a likely "
+            "Fewer than half of the customers have a champion recorded; Casefile will infer a likely "
             "champion from email and meeting traffic (labelled as inferred)."
         )
     steps = [

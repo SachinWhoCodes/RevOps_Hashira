@@ -19,12 +19,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.orm import Session
 
 from casefile.ai.gateway import AiGateway, AiResult, load_prompt
 from casefile.ai.masking import mask
-from casefile.db.models import Activity, ActivityType, Contact, Direction, EmailLabel, LabelStatus, Org
+from casefile.db.models import Activity, ActivityType, Contact, Deal, Direction, EmailLabel, LabelStatus, Org
 
 ACCEPT_AT = 0.7
 MAX_BODY_CHARS = 6000  # long threads are cut, never silently: the cut is marked in the text
@@ -99,6 +99,8 @@ def _pending_filter(org: Org, prompt_version: str, since_days: int) -> list[Any]
         Activity.type == ActivityType.email,
         Activity.direction == Direction.inbound,
         Activity.account_id.is_not(None),
+        # Customers only (a company with a deal): mail from prospects, vendors and newsletters is never read.
+        exists().where(Deal.account_id == Activity.account_id),
         Activity.occurred_at >= since,
         Activity.extra["auto_reply"].astext.is_distinct_from("true"),
         Activity.extra["bounce"].astext.is_distinct_from("true"),

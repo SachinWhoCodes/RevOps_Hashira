@@ -70,7 +70,7 @@ def check_mapping(
         token = connection_secret(conn)
     except AuthError:
         return {"ok": True, "problems": [], "checked_against_crm": False, "note": "CRM token not available"}
-    schema = HubSpotLive(token).schema()
+    schema = HubSpotLive(token).schema_details()
     problems = []
     wanted = [
         ("companies", clean["company"]["seats_purchased"]),
@@ -88,7 +88,63 @@ def check_mapping(
     for stage in clean["deal"]["won_stages"] + clean["deal"]["lost_stages"]:
         if stage not in schema["deal_stages"]:
             problems.append(f"deal stage '{stage}' does not exist in any of your pipelines")
-    return {"ok": not problems, "problems": problems, "checked_against_crm": True}
+    return {
+        "ok": not problems,
+        "problems": problems,
+        "checked_against_crm": True,
+        "suggestions": suggest(clean, schema),
+    }
+
+
+# What each mapped field usually looks like in a real CRM: (object, words in the name or label, types).
+SUGGEST_RULES: dict[str, tuple[str, tuple[str, ...], set[str]]] = {
+    "company.renewal_date": (
+        "companies",
+        ("renewal", "contract end", "contract_end", "end date", "expir", "term end"),
+        {"date", "datetime"},
+    ),
+    "company.seats_purchased": ("companies", ("seat", "licen", "user count", "users purchased"), {"number"}),
+    "company.arr": (
+        "companies",
+        ("arr", "annual recurring", "recurring revenue", "contract value", "acv", "mrr"),
+        {"number"},
+    ),
+    "contact.role_property": ("contacts", ("buying role", "buying_role", "persona", "role"), {"enumeration"}),
+    "contact.status_property": (
+        "contacts",
+        ("employment", "left company", "still at"),
+        {"enumeration", "bool"},
+    ),
+}
+
+
+def suggest(clean: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    """Likely matches in *this* CRM for fields whose mapped property is missing, and won/lost stages
+    taken from each pipeline's own closed stages (probability 1 = won, 0 = lost). Suggestions only:
+    nothing is saved until an admin picks one."""
+    out: dict[str, Any] = {}
+    for key, (obj, words, types) in SUGGEST_RULES.items():
+        section, field = key.split(".")
+        current = clean[section].get(field)
+        if not current or current in schema[obj]:
+            continue
+        scored = []
+        for p in schema[f"{obj}_details"]:
+            text = f"{p['name']} {p['label']}".lower().replace("_", " ")
+            hits = sum(w.replace("_", " ") in text for w in words)
+            if hits and (not types or p["type"] in types):
+                scored.append((-hits, p["name"].startswith("hs_"), p["name"], p["label"]))
+        if scored:
+            out[key] = [{"name": n, "label": label} for _, _, n, label in sorted(scored)[:5]]
+    stages = schema.get("deal_stages_details") or []
+    won = [s for s in stages if s["closed"] and (s["probability"] or 0) >= 1]
+    lost = [s for s in stages if s["closed"] and s["probability"] == 0]
+    known = set(schema["deal_stages"])
+    if any(st not in known for st in clean["deal"]["won_stages"]) and won:
+        out["deal.won_stages"] = [{"name": s["id"], "label": f"{s['pipeline']}: {s['label']}"} for s in won]
+    if any(st not in known for st in clean["deal"]["lost_stages"]) and lost:
+        out["deal.lost_stages"] = [{"name": s["id"], "label": f"{s['pipeline']}: {s['label']}"} for s in lost]
+    return out
 
 
 @router.post("/reapply")

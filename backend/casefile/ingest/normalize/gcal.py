@@ -18,7 +18,7 @@ from casefile.connectors.base import RawItem
 from casefile.db.models import Activity, ActivityType, Direction, MatchMethod
 from casefile.ingest.context import NormalizeContext
 from casefile.ingest.text import snippet
-from casefile.ingest.util import email_domain, is_system_address, parse_date, parse_ts
+from casefile.ingest.util import is_ours, is_system_address, parse_date, parse_ts
 
 SOURCE = "gcal"
 
@@ -31,7 +31,12 @@ def _start(event: dict[str, Any], tz: str) -> datetime | None:
     return datetime.combine(day, time(9, 0), tzinfo=ZoneInfo(tz)) if day else None
 
 
-def parse_event(event: dict[str, Any], internal_domains: set[str], tz: str) -> dict[str, Any] | None:
+def parse_event(
+    event: dict[str, Any],
+    internal_domains: set[str],
+    tz: str,
+    internal_addresses: set[str] | frozenset[str] = frozenset(),
+) -> dict[str, Any] | None:
     start = _start(event, tz)
     created = parse_ts(event.get("created"))
     if start is None or created is None:
@@ -40,7 +45,9 @@ def parse_event(event: dict[str, Any], internal_domains: set[str], tz: str) -> d
     organizer = ((event.get("organizer") or {}).get("email") or "").lower()
     emails = list(dict.fromkeys([organizer, *[a["email"].lower() for a in attendees]]))
     emails = [e for e in emails if e and not is_system_address(e) and not e.endswith("calendar.google.com")]
-    external = [e for e in emails if email_domain(e) not in internal_domains]
+    calendar_owner = str((event.get("_casefile") or {}).get("calendar", "")).lower()
+    ours = {*internal_addresses, calendar_owner} - {""}
+    external = [e for e in emails if not is_ours(e, internal_domains, ours)]
     if not external:
         return None
     cancelled = event.get("status") == "cancelled"
@@ -48,7 +55,7 @@ def parse_event(event: dict[str, Any], internal_domains: set[str], tz: str) -> d
     end = parse_ts((event.get("end") or {}).get("dateTime"))
     return {
         "type": ActivityType.meeting,
-        "direction": Direction.outbound if email_domain(organizer) in internal_domains else Direction.inbound,
+        "direction": Direction.outbound if is_ours(organizer, internal_domains, ours) else Direction.inbound,
         "occurred_at": start,
         "known_at": created,
         "cancelled_at": parse_ts(event.get("updated")) if cancelled else None,
@@ -75,7 +82,7 @@ def parse_event(event: dict[str, Any], internal_domains: set[str], tz: str) -> d
 def events(ctx: NormalizeContext, items: list[RawItem]) -> None:
     by_id: dict[str, dict[str, Any]] = {}
     for item in items:
-        parsed = parse_event(item.payload, ctx.internal_domains, ctx.org.timezone)
+        parsed = parse_event(item.payload, ctx.internal_domains, ctx.org.timezone, ctx.internal_addresses)
         if parsed:
             parsed["org_id"] = ctx.org_id
             by_id[parsed["source_id"]] = parsed  # attendees' copies of one event collapse to one row

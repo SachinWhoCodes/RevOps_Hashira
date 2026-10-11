@@ -211,7 +211,8 @@ function DataStep({ step }: { step: StepOf<"data"> }) {
   const c = step.data.counts;
   const n = (k: string) => (c[k] ?? 0).toLocaleString("en-IN");
   const rows: [string, string][] = [
-    ["Customer companies", n("accounts")],
+    ["Companies in your CRM", n("accounts")],
+    ["… customers (with a deal), watched by Casefile", n("customers")],
     ["… with a renewal date", n("accounts_with_renewal_date")],
     ["… with an owner who can log in", n("accounts_with_owner")],
     ["… with a champion recorded", n("accounts_with_recorded_champion")],

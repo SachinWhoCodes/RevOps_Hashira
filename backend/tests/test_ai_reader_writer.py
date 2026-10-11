@@ -20,6 +20,7 @@ from casefile.db.models import (
     Account,
     Activity,
     ActivityType,
+    Deal,
     Direction,
     EmailLabel,
     LabelStatus,
@@ -36,6 +37,10 @@ def setup(db: Session):  # type: ignore[no-untyped-def]
     org = ensure_org(db, slug="reader-test", name="T", timezone="UTC", internal_domains=["vendor.test"])
     acc = Account(org_id=org.id, crm_source="hubspot", crm_id="1", name="Acme", domains=["acme.test"])
     db.add(acc)
+    db.flush()
+    db.add(
+        Deal(org_id=org.id, account_id=acc.id, crm_source="hubspot", crm_id="d1", name="Renewal")
+    )  # a customer
     db.flush()
 
     def email(body: str, **extra: object) -> Activity:

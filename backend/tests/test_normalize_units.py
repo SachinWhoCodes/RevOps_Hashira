@@ -122,3 +122,34 @@ def test_calendar_internal_event_is_skipped_and_cancellation_kept() -> None:
     out = parse_event(cancelled, INTERNAL, "Asia/Kolkata")
     assert out is not None and out["cancelled_at"] is not None
     assert out["known_at"].isoformat().startswith("2026-01-01")
+
+
+def test_a_team_on_personal_gmail_still_knows_which_side_wrote() -> None:
+    """No company domain (gmail.com is never one): the connected mailbox and the organisation's own
+    users count as "us", so our sent mail is outbound and a customer's reply is inbound."""
+    sent = _msg({"From": "Sam <sam@gmail.com>", "To": "dana@acme.test"})
+    sent["_casefile"] = {"mailbox": "sam@gmail.com"}
+    out = parse_message(sent, set())
+    assert out is not None and out["direction"] == Direction.outbound
+    reply = _msg({"From": "dana@acme.test", "To": "sam@gmail.com"})
+    reply["_casefile"] = {"mailbox": "sam@gmail.com"}
+    out = parse_message(reply, set())
+    assert out is not None and out["direction"] == Direction.inbound
+    # A colleague who is a Casefile user, also on gmail.com, writing to the customer: ours too.
+    colleague = _msg({"From": "lee@gmail.com", "To": "dana@acme.test"})
+    out = parse_message(colleague, set(), {"lee@gmail.com"})
+    assert out is not None and out["direction"] == Direction.outbound
+
+
+def test_a_meeting_on_a_personal_calendar_counts_only_customers_as_external() -> None:
+    base = {"id": "e9", "created": "2026-01-01T00:00:00Z", "start": {"dateTime": "2026-02-01T10:00:00+05:30"}}
+    own_only = {
+        **base,
+        "organizer": {"email": "sam@gmail.com"},
+        "attendees": [{"email": "sam@gmail.com"}],
+        "_casefile": {"calendar": "sam@gmail.com"},
+    }
+    assert parse_event(own_only, set(), "Asia/Kolkata") is None  # just us: not a customer meeting
+    with_customer = {**own_only, "attendees": [{"email": "sam@gmail.com"}, {"email": "dana@acme.test"}]}
+    out = parse_event(with_customer, set(), "Asia/Kolkata")
+    assert out is not None and out["direction"] == Direction.outbound

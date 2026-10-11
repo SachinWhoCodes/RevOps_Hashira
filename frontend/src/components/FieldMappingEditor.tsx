@@ -14,7 +14,19 @@ type Mapping = {
   };
 };
 type MappingResponse = { mapping: Mapping; version: number; saved_at: string | null; live_crm: boolean };
-type Check = { ok: boolean; problems: string[]; checked_against_crm: boolean; note?: string };
+type Suggestion = { name: string; label: string };
+type Check = { ok: boolean; problems: string[]; checked_against_crm: boolean; note?: string; suggestions?: Record<string, Suggestion[]> };
+
+// Fields the check can suggest a match for, from the client's own CRM (names and labels, no records).
+const SUGGESTED: Record<string, { label: string; apply: (h: Mapping["hubspot"], picks: string[]) => void; all?: boolean }> = {
+  "company.renewal_date": { label: "Renewal date", apply: (h, [v]) => { h.company.renewal_date = v; } },
+  "company.seats_purchased": { label: "Seats purchased", apply: (h, [v]) => { h.company.seats_purchased = v; } },
+  "company.arr": { label: "Annual recurring revenue", apply: (h, [v]) => { h.company.arr = v; } },
+  "contact.role_property": { label: "Contact role", apply: (h, [v]) => { h.contact.role_property = v; } },
+  "contact.status_property": { label: "Contact status", apply: (h, [v]) => { h.contact.status_property = v; } },
+  "deal.won_stages": { label: "Won stages", apply: (h, v) => { h.deal.won_stages = v; }, all: true },
+  "deal.lost_stages": { label: "Lost stages", apply: (h, v) => { h.deal.lost_stages = v; }, all: true },
+};
 
 const ROLES = ["champion", "economic_buyer", "user", "unknown"];
 const STATUSES = ["active", "left"];
@@ -163,6 +175,34 @@ export default function FieldMappingEditor() {
         <Callout className="mt-4" tone={check.data.ok ? "ok" : "risk"} title={check.data.ok ? "Looks right" : "Problems found"} onDismiss={() => check.reset()}>
           {check.data.problems.length > 0 && <ul className="mt-1 list-disc space-y-0.5 pl-4">{check.data.problems.map((p) => <li key={p}>{p}</li>)}</ul>}
           {!check.data.checked_against_crm && <div className="mt-1">{check.data.note ?? "Not checked against a live CRM."}</div>}
+          {check.data.suggestions && Object.keys(check.data.suggestions).length > 0 && (
+            <div className="mt-3">
+              <div className="font-medium text-ink">Possible matches in your CRM</div>
+              <ul className="mt-1 space-y-1.5">
+                {Object.entries(check.data.suggestions).map(([key, options]) => {
+                  const rule = SUGGESTED[key];
+                  if (!rule) return null;
+                  return (
+                    <li key={key} className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-muted">{rule.label}:</span>
+                      {rule.all ? (
+                        <Button size="sm" onClick={() => edit((x) => rule.apply(x, options.map((o) => o.name)))}>
+                          Use {options.map((o) => o.label || o.name).join(", ")}
+                        </Button>
+                      ) : (
+                        options.map((o) => (
+                          <Button key={o.name} size="sm" onClick={() => edit((x) => rule.apply(x, [o.name]))}>
+                            {o.label || o.name} <span className="font-mono text-[11px] text-faint">{o.name}</span>
+                          </Button>
+                        ))
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="mt-1 text-xs text-muted">Picking one changes the form only; check again, then save as a new version.</div>
+            </div>
+          )}
         </Callout>
       )}
       {save.error && <div className="mt-4"><ErrorNote error={save.error} /></div>}

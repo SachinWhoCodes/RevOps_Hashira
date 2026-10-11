@@ -15,7 +15,7 @@ import respx
 
 from casefile.connectors.base import AuthError, ConnectorError, NotFound, RateLimited
 from casefile.connectors.google.calendar import CalendarReader
-from casefile.connectors.google.gmail import GmailReader
+from casefile.connectors.google.gmail import GmailReader, target_hashes
 from casefile.connectors.http import HttpSource
 from casefile.connectors.hubspot.reader import HubSpotReader
 from casefile.ingest.util import field_mapping
@@ -138,6 +138,8 @@ def test_hubspot_incremental_uses_search_then_fetches_history() -> None:
 
 # ---------------------------------------------------------------- Gmail
 
+GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me"
+
 
 def _meta(mid: str, thread: str, frm: str, to: str = "me@vendor.test", subject: str = "Hi") -> dict:
     headers = [
@@ -148,58 +150,141 @@ def _meta(mid: str, thread: str, frm: str, to: str = "me@vendor.test", subject: 
     return {"id": mid, "threadId": thread, "payload": {"headers": headers}}
 
 
-@respx.mock
-def test_gmail_fetches_full_message_only_when_relevant() -> None:
-    base = "https://gmail.googleapis.com/gmail/v1/users/me"
-    respx.get(f"{base}/profile").mock(
-        return_value=httpx.Response(200, json={"emailAddress": "Me@vendor.test", "historyId": "500"})
+class NoCustomers(Ctx):
+    def customer_domains(self) -> set[str]:
+        return set()
+
+    def known_emails(self) -> set[str]:
+        return set()
+
+
+def _profile(history: str = "500") -> None:
+    respx.get(f"{GMAIL}/profile").mock(
+        return_value=httpx.Response(200, json={"emailAddress": "Me@vendor.test", "historyId": history})
     )
-    respx.get(f"{base}/messages").mock(
-        return_value=httpx.Response(
-            200, json={"messages": [{"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"}]}
+
+
+@respx.mock
+def test_gmail_first_run_searches_customer_threads_and_keeps_them_whole() -> None:
+    _profile()
+    threads = {
+        "t1": [_meta("a", "t1", "dana@acme.test"), _meta("c", "t1", "dana.home@gmail.com")],  # reply kept
+        "t2": [_meta("b", "t2", "newsletter@shop.test")],  # search false positive: read, not kept
+        "t3": [_meta("d", "t3", "pat@gmail.com")],  # known contact on free mail
+    }
+    threads["t1"].append({**_meta("x", "t1", "dana@acme.test"), "labelIds": ["TRASH"]})  # trashed: skipped
+    queries: list[str] = []
+
+    def search(request: httpx.Request) -> httpx.Response:
+        q = request.url.params["q"]
+        queries.append(q)
+        found = [] if "mailer-daemon" in q else [{"id": t} for t in threads]
+        return httpx.Response(200, json={"threads": found})
+
+    respx.get(f"{GMAIL}/threads").mock(side_effect=search)
+    respx.get(url__regex=rf"{GMAIL}/threads/\w+").mock(
+        side_effect=lambda r: httpx.Response(
+            200,
+            json={"id": r.url.path.rsplit("/", 1)[-1], "messages": threads[r.url.path.rsplit("/", 1)[-1]]},
         )
     )
-    metas = {
-        "a": _meta("a", "t1", "dana@acme.test"),  # customer domain → keep
-        "b": _meta("b", "t2", "newsletter@shop.test"),  # unrelated → never fetched in full
-        "c": _meta("c", "t1", "dana.home@gmail.com"),  # same thread as a kept one → keep
-        "d": _meta("d", "t3", "pat@gmail.com"),  # known contact on free-mail → keep
-    }
+    pages = list(GmailReader(token=None, context=Ctx(), http=_src("gmail", GMAIL)).pages({}))  # type: ignore[arg-type]
+    kept = sorted(i.payload["id"] for p in pages for i in p.items)
+    assert kept == ["a", "c", "d"]
+    assert "from:acme.test" in queries[0] and "from:pat@gmail.com" in queries[0]
+    assert any("mailer-daemon" in q for q in queries)  # bounces are searched once there are contacts
+    cursor = pages[-1].cursor
+    assert cursor["history_id"] == "500" and cursor["bounces_searched"] is True
+    assert set(cursor["searched"]) == set(target_hashes({"acme.test"}, {"pat@gmail.com"}))
+
+
+@respx.mock
+def test_gmail_reads_nothing_when_there_are_no_customers() -> None:
+    """A mailbox connected before the CRM: no search, no message read; only the history position."""
+    _profile("77")
+    pages = list(GmailReader(token=None, context=NoCustomers(), http=_src("gmail", GMAIL)).pages({}))  # type: ignore[arg-type]
+    assert [i for p in pages for i in p.items] == [] and pages[-1].cursor["history_id"] == "77"
+    assert [c.request.url.path for c in respx.calls] == ["/gmail/v1/users/me/profile"]
+
+
+@respx.mock
+def test_gmail_catches_up_on_customers_added_after_the_mailbox() -> None:
+    _profile("950")
+    search = respx.get(f"{GMAIL}/threads").mock(
+        return_value=httpx.Response(200, json={"threads": [{"id": "t9"}]})
+    )
+    respx.get(f"{GMAIL}/threads/t9").mock(
+        return_value=httpx.Response(
+            200, json={"id": "t9", "messages": [_meta("old1", "t9", "dana@acme.test")]}
+        )
+    )
+    respx.get(f"{GMAIL}/history").mock(return_value=httpx.Response(200, json={"history": []}))
+    already = target_hashes(set(), {"pat@gmail.com"})  # pat was searched for; acme.test is new
+    cursor = {"history_id": "900", "searched": already, "bounces_searched": True}
+    pages = list(GmailReader(token=None, context=Ctx(), http=_src("gmail", GMAIL)).pages(cursor))  # type: ignore[arg-type]
+    q = search.calls[0].request.url.params["q"]
+    assert "from:acme.test" in q and "pat@gmail.com" not in q and len(search.calls) == 1
+    assert [i.external_id for p in pages for i in p.items] == ["me@vendor.test:old1"]
+    assert set(pages[-1].cursor["searched"]) == set(target_hashes({"acme.test"}, {"pat@gmail.com"}))
+    assert "acme" not in json.dumps(pages[-1].cursor)  # the cursor holds hashes, not customer names
+
+
+@respx.mock
+def test_gmail_new_mail_is_checked_by_headers_first() -> None:
+    _profile("1001")
+    respx.get(f"{GMAIL}/history").mock(
+        return_value=httpx.Response(
+            200, json={"history": [{"messagesAdded": [{"message": {"id": "n1"}}, {"message": {"id": "n2"}}]}]}
+        )
+    )
+    metas = {"n1": _meta("n1", "t1", "dana@acme.test"), "n2": _meta("n2", "t5", "friend@gmail.com")}
     full_calls: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def message(request: httpx.Request) -> httpx.Response:
         mid = request.url.path.rsplit("/", 1)[-1]
         if request.url.params.get("format") == "full":
             full_calls.append(mid)
-            return httpx.Response(200, json={**metas[mid], "internalDate": "1700000000000"})
         return httpx.Response(200, json=metas[mid])
 
-    respx.get(url__regex=rf"{base}/messages/\w+").mock(side_effect=handler)
-    reader = GmailReader(token=None, context=Ctx(), http=_src("gmail", base))  # type: ignore[arg-type]
-    pages = list(reader.pages({}))
-    assert sorted(full_calls) == ["a", "c", "d"]
-    items = [i for p in pages for i in p.items]
-    assert all(i.payload["_casefile"]["mailbox"] == "me@vendor.test" for i in items)
-    assert pages[-1].cursor["history_id"] == "500"
+    respx.get(url__regex=rf"{GMAIL}/messages/\w+").mock(side_effect=message)
+    searched = target_hashes(Ctx().customer_domains(), Ctx().known_emails())
+    cursor = {"history_id": "1000", "searched": searched, "bounces_searched": True}
+    pages = list(GmailReader(token=None, context=Ctx(), http=_src("gmail", GMAIL)).pages(cursor))  # type: ignore[arg-type]
+    assert full_calls == ["n1"] and [i.payload["id"] for p in pages for i in p.items] == ["n1"]
+    assert pages[-1].cursor["history_id"] == "1001"
 
 
 @respx.mock
-def test_gmail_expired_history_falls_back_to_full_scan_next_run() -> None:
-    base = "https://gmail.googleapis.com/gmail/v1/users/me"
-    respx.get(f"{base}/profile").mock(
-        return_value=httpx.Response(200, json={"emailAddress": "me@vendor.test", "historyId": "900"})
+def test_gmail_expired_history_searches_every_customer_again_next_run() -> None:
+    _profile("900")
+    respx.get(f"{GMAIL}/history").mock(return_value=httpx.Response(404))
+    searched = target_hashes(Ctx().customer_domains(), Ctx().known_emails())
+    cursor = {"history_id": "1", "searched": searched, "bounces_searched": True}
+    pages = list(GmailReader(token=None, context=Ctx(), http=_src("gmail", GMAIL)).pages(cursor))  # type: ignore[arg-type]
+    assert "history_id" not in pages[-1].cursor and pages[-1].cursor["searched"] == []
+
+
+def test_gmail_does_not_keep_automated_mail_from_a_customer_domain() -> None:
+    reader = GmailReader(token=None, context=Ctx())  # type: ignore[arg-type]
+    alert = _meta("s1", "t8", "no-reply@acme.test", subject="Your weekly report")
+    assert reader._relevant(alert, set(), {"acme.test"}, set()) is False
+    assert reader._relevant(_meta("s2", "t9", "dana@acme.test"), set(), {"acme.test"}, set()) is True
+
+
+def test_gmail_ignores_bounces_until_there_are_customer_contacts() -> None:
+    reader = GmailReader(token=None, context=Ctx())  # type: ignore[arg-type]
+    bounce = _meta(
+        "b1", "t1", "mailer-daemon@googlemail.com", subject="Delivery Status Notification (Failure)"
     )
-    respx.get(f"{base}/history").mock(return_value=httpx.Response(404))
-    reader = GmailReader(token=None, context=Ctx(), http=_src("gmail", base))  # type: ignore[arg-type]
-    pages = list(reader.pages({"history_id": "1"}))
-    assert "history_id" not in pages[-1].cursor
+    assert reader._relevant(bounce, set(), set(), {"pat@gmail.com"}) is True
+    assert reader._relevant(bounce, set(), set(), set()) is False  # a personal mailbox, no CRM yet
 
 
 # ---------------------------------------------------------------- Calendar
 
 
 @respx.mock
-def test_calendar_keeps_external_and_cancelled_and_saves_sync_token() -> None:
+def test_calendar_keeps_customer_meetings_and_cancellations_and_saves_sync_token() -> None:
     base = "https://www.googleapis.com/calendar/v3"
     respx.get(f"{base}/calendars/primary").mock(
         return_value=httpx.Response(200, json={"id": "me@vendor.test"})
@@ -212,6 +297,8 @@ def test_calendar_keeps_external_and_cancelled_and_saves_sync_token() -> None:
                     {"id": "e1", "attendees": [{"email": "me@vendor.test"}, {"email": "dana@acme.test"}]},
                     {"id": "e2", "attendees": [{"email": "me@vendor.test"}, {"email": "boss@vendor.test"}]},
                     {"id": "e3", "status": "cancelled"},
+                    # an outsider who is not a customer (a friend, a vendor, a candidate): not kept
+                    {"id": "e4", "attendees": [{"email": "me@vendor.test"}, {"email": "friend@gmail.com"}]},
                 ],
                 "nextSyncToken": "tok",
             },
@@ -239,3 +326,43 @@ def test_calendar_expired_sync_token_restarts_full_sync() -> None:
     respx.get(f"{base}/calendars/primary/events").mock(side_effect=handler)
     reader = CalendarReader(token=None, context=Ctx(), http=_src("gcal", base))  # type: ignore[arg-type]
     assert list(reader.pages({"sync_token": "old"}))[-1].cursor["sync_token"] == "new"
+
+
+@respx.mock
+def test_calendar_lists_the_window_again_when_new_customers_appear() -> None:
+    base = "https://www.googleapis.com/calendar/v3"
+    respx.get(f"{base}/calendars/primary").mock(
+        return_value=httpx.Response(200, json={"id": "me@vendor.test"})
+    )
+    events = respx.get(f"{base}/calendars/primary/events").mock(
+        return_value=httpx.Response(200, json={"items": [], "nextSyncToken": "fresh"})
+    )
+    reader = CalendarReader(token=None, context=Ctx(), http=_src("gcal", base))  # type: ignore[arg-type]
+    up_to_date = target_hashes({"acme.test"}, {"pat@gmail.com"})
+    list(reader.pages({"sync_token": "tok", "searched": up_to_date}))
+    assert events.calls[-1].request.url.params.get("syncToken") == "tok"  # nothing new: incremental
+    list(reader.pages({"sync_token": "tok", "searched": []}))
+    assert "timeMin" in events.calls[-1].request.url.params  # new customers: full window again
+
+
+def test_a_google_quota_403_is_retried_but_a_missing_scope_403_is_not() -> None:
+    from casefile.connectors.base import AuthError
+    from casefile.connectors.http import HttpSource
+
+    replies = [
+        httpx.Response(
+            403,
+            json={"error": {"code": 403, "message": "Quota exceeded for quota metric 'Total Query Cost'"}},
+        ),
+        httpx.Response(200, json={"ok": True}),
+    ]
+    slept: list[float] = []
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: replies.pop(0)), base_url="https://x.test")
+    assert HttpSource("gmail", client, sleep=slept.append).request("GET", "/a") == {"ok": True}
+    assert slept == [2.0]
+    scope = httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(403, json={"category": "MISSING_SCOPES"})),
+        base_url="https://x.test",
+    )
+    with pytest.raises(AuthError):
+        HttpSource("hubspot", scope, sleep=slept.append).request("GET", "/b")

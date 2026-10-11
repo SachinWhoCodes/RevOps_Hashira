@@ -16,6 +16,13 @@ MAX_ATTEMPTS = 5
 MAX_RETRY_AFTER_SECONDS = 60.0
 
 
+RATE_LIMIT_403 = ("rateLimitExceeded", "userRateLimitExceeded", "Quota exceeded", "RATE_LIMIT_EXCEEDED")
+
+
+def _rate_limit_403(response: httpx.Response) -> bool:
+    return any(marker in response.text for marker in RATE_LIMIT_403)
+
+
 class HttpSource:
     def __init__(self, name: str, client: httpx.Client, *, sleep: Any = time.sleep) -> None:
         self.name = name
@@ -30,6 +37,15 @@ class HttpSource:
                 if attempt == MAX_ATTEMPTS:
                     raise ConnectorError(f"{self.name}: network error: {exc}") from exc
                 self._sleep(min(2**attempt, 30))
+                continue
+            if response.status_code == 403 and _rate_limit_403(response):
+                # Google reports per-user quotas as 403 (rateLimitExceeded, "Quota exceeded … per minute")
+                # and asks for exponential backoff. Observed live on a real mailbox, 2026-10-11.
+                if attempt == MAX_ATTEMPTS:
+                    raise RateLimited(f"{self.name}: quota exceeded; try again in a minute", retry_after=60.0)
+                wait = float(response.headers.get("Retry-After", 2**attempt))
+                log.info("rate_limited", source=self.name, wait=wait, status=403)
+                self._sleep(min(wait, MAX_RETRY_AFTER_SECONDS))
                 continue
             if response.status_code in (401, 403):
                 raise AuthError(

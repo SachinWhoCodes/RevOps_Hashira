@@ -34,7 +34,7 @@ from casefile.db.models import (
 from casefile.ingest.context import NormalizeContext
 from casefile.ingest.normalize.gmail import BODY_RETENTION
 from casefile.ingest.text import html_to_text, snippet, strip_zero_width
-from casefile.ingest.util import email_domain, is_system_address, parse_date, parse_decimal_str, parse_ts
+from casefile.ingest.util import is_system_address, parse_date, parse_decimal_str, parse_ts
 
 SOURCE = "hubspot"
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -405,7 +405,7 @@ def _associated_contacts(ctx: NormalizeContext, p: dict[str, Any]) -> list[tuple
 def _match(
     ctx: NormalizeContext, p: dict[str, Any], participants: list[str]
 ) -> tuple[uuid.UUID | None, MatchMethod, float]:
-    if participants and all(email_domain(e) in ctx.internal_domains for e in participants):
+    if participants and all(ctx.is_internal(e) for e in participants):
         return None, MatchMethod.internal_only, 0.0
     account_id = ctx.account_id_for_crm(SOURCE, _first_company(p))
     if account_id:
@@ -439,7 +439,7 @@ def parse_email(ctx: NormalizeContext, p: dict[str, Any]) -> dict[str, Any] | No
     body, had_zero_width = strip_zero_width(body)
 
     def internal(addr: str) -> bool:
-        return email_domain(addr) in ctx.internal_domains
+        return ctx.is_internal(addr)
 
     if sender:
         if internal(sender) and to + cc and all(internal(a) for a in to + cc):
@@ -518,9 +518,7 @@ def parse_meeting(ctx: NormalizeContext, p: dict[str, Any]) -> dict[str, Any] | 
     return {
         "type": ActivityType.meeting,
         "direction": (
-            Direction.inbound
-            if organizer and email_domain(organizer) not in ctx.internal_domains
-            else Direction.outbound
+            Direction.inbound if organizer and not ctx.is_internal(organizer) else Direction.outbound
         ),
         "occurred_at": start,
         "known_at": booked,  # a meeting booked in March for May counts as booked in April

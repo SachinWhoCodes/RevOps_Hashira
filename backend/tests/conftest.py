@@ -17,6 +17,20 @@ BACKEND = Path(__file__).resolve().parents[1]
 TEST_TODAY = date(2026, 10, 10)
 
 
+# Tests never reach real services. Environment variables override the developer's .env, so blank every
+# credential that would make code under test send or call out for real (email via Brevo above all).
+NO_REAL_SERVICES = {"BREVO_API_KEY": "", "MAIL_FROM_EMAIL": "", "ANTHROPIC_API_KEY": ""}
+os.environ.update(NO_REAL_SERVICES)
+get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_services(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-applied for every test, in case a test changed the environment and cleared the settings cache."""
+    for key, value in NO_REAL_SERVICES.items():
+        monkeypatch.setenv(key, value)
+
+
 def _test_url() -> str:
     return os.environ.get("TEST_DATABASE_URL") or get_settings().test_database_url
 

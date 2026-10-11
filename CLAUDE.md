@@ -17,7 +17,7 @@ Phase S (self-service) and the move to a Windows machine (§0b). Phases 0–6, C
    ```
    colima start                # Docker runtime; `docker compose` plugin is NOT wired → Makefile uses docker-compose
    make up                     # Postgres 16 on port 5433 + migrations on dev and test DBs
-   make test                   # expect 341 passed in ~90 s
+   make test                   # expect 360 passed in ~90 s
    ```
 3. Dev servers: `make api` (:8000) and `make web` (:5173), or in the Claude desktop app use the
    preview launch configs `api` / `web` in `.claude/launch.json` (absolute paths on purpose; `.claude/`
@@ -195,7 +195,7 @@ backend/casefile/
   cli.py               `uv run casefile <cmd>` (synth, bootstrap, create-org, init-secrets-key, sync,
                        google-auth, recompute, explain, eval, evals, backtest, derive-outcomes,
                        match-report, set-password, db-roles, reapply-mapping…)
-backend/tests/         341 tests; fake_ai.py (FakeClient), fake_writers.py, factories.py, conftest.py
+backend/tests/         360 tests; fake_ai.py (FakeClient), fake_writers.py, factories.py, conftest.py
 frontend/src/          React 19 + Vite 7 + Tailwind 4 + TanStack Query + React Router 7 + lucide-react (ADR 0009)
   index.css            design tokens (light + dark CSS variables), motion, base — never raw hex in components
   components/ui/       the design system: Button, Badge, Card/PageHeader, Field/Input/Select…, Callout/
@@ -361,6 +361,23 @@ its loop also sends the 09:00 (Asia/Kolkata) morning digest to the workspace own
   (self-service path, admin gavin@hooli.test); both in setup mode. Test passwords live only in the
   session scratchpad.
 
+## 11e. Real client data on the laptop (since 2026-10-11, ADR 0010)
+
+- Follow `docs/runbooks/client-demo.md`: day 0 connect + check (setup mode), day 1 shadow after the
+  user approves the estimated AI spend, demo in shadow (`make executor SHADOW=1`).
+- `casefile list-orgs`; `casefile delete-org --slug X --confirm X --reason …` removes a company's data
+  (receipt in `org_deletion`); `casefile set-ai-cap --org X --usd N` (ask the user first).
+- Google: our app stays in Testing; add each client mailbox as a Google test user before connecting.
+- Tests blank `BREVO_API_KEY`, `MAIL_FROM_EMAIL`, `ANTHROPIC_API_KEY` (conftest): keep it that way.
+- Only accounts with a deal are customers (scored; mail/meetings searched). Our side = internal domains
+  + own users' emails + connected mailboxes (`ingest/util.is_ours`). Gmail never lists a mailbox: it
+  searches customer threads (cursor keeps hashes of searched addresses).
+- Rehearsal org `onewho` (the user's own sign-up, personal Gmail + a new free HubSpot portal 247660225):
+  the user wants a full journey with it; do not delete it unless asked. Its CRM and email are real; its
+  PRODUCT USAGE IS GENERATED (`casefile generate-usage`, `data/usage/onewho-product-usage.csv`, one story
+  per company, see `synth/usage_stories.py`). The user chose not to label it in the app; never describe
+  ONEWHO's usage-based findings as observed or real in reports.
+
 ## 12. Gotchas learned the hard way
 
 - Alembic + naming convention: pass existing constraint names through `op.f("ck_…")`, or Alembic
@@ -384,6 +401,10 @@ its loop also sends the 09:00 (Asia/Kolkata) morning digest to the workspace own
   system-mode processes under RLS). Pair every `system_scope(s)` with `system_scope(s, False)`.
 - Creating roles inside concurrent test transactions deadlocks on `casefile_app` membership: tests use one
   committed probe role (`casefile_rls_probe`).
+- The audit guard is per row (UPDATE/DELETE) + per statement (TRUNCATE) since `f7d1b5c8e326`: a statement
+  trigger also fired on cascades that delete zero rows.
+- Changing `.env` needs an API/worker restart (settings are cached); a sign-up made before the restart
+  goes to `data/outbox` even with Brevo configured.
 - HubSpot scope check without writing: POST an empty batch (`{"inputs": []}`) → 200/201 allowed, 403 not.
   403 bodies list `requiredGranularScopes` (any-of).
 

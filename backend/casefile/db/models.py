@@ -325,6 +325,24 @@ class Signup(Base):
     created_at: Mapped[datetime] = _created()
 
 
+class OrgDeletion(Base):
+    """Receipt for an organisation whose data was deleted on request. Holds no names, emails or
+    content: counts, and the verified final hash of its audit chain (proof of what existed)."""
+
+    __tablename__ = "org_deletion"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID]  # no foreign key: the organisation is gone
+    slug: Mapped[str] = mapped_column(String(64))
+    deleted_at: Mapped[datetime] = _created()
+    deleted_by: Mapped[str] = mapped_column(String(200))
+    reason: Mapped[str | None] = mapped_column(Text)
+    counts: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    audit_entries: Mapped[int] = mapped_column(default=0)
+    audit_chain_ok: Mapped[bool] = mapped_column(default=True)
+    audit_head_hash: Mapped[str | None] = mapped_column(String(64))
+
+
 class UserInvite(Base):
     """A one-time link that lets a person set their password. Only a hash of the token is stored;
     the link itself is shown once to the admin who created it."""

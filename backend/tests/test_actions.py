@@ -155,7 +155,8 @@ def test_plan_for_acme_follows_the_playbook(world: World) -> None:
     assert all(i.status == S.proposed for i in by_type.values()), {k: v.status for k, v in by_type.items()}
     task = by_type["crm_task"]
     assert task.why and task.evidence_ids, "every line carries the verified claims and evidence behind it"
-    assert task.target_ref["company"] and task.target_ref["deal"]
+    # Attached to the renewal deal only: a deal-write key cannot link to companies (observed in HubSpot).
+    assert task.target_ref["deal"] and task.target_ref["company"] is None
     draft = by_type["gmail_draft"].proposed_payload
     assert draft["to"] and draft["to"][0].endswith("@acme-corp.test")
     assert cs.notes["draft_source"] == "template"

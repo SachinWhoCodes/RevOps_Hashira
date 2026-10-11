@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from casefile.config import REPO_ROOT, get_settings
@@ -20,12 +21,25 @@ class DbReaderContext:
     def __init__(self, session: Session, org: Org) -> None:
         self.session, self.org = session, org
 
+    def _customers(self) -> Any:
+        """Accounts with at least one deal. A CRM also holds prospects, vendors and companies it
+        created from whoever emailed (newsletters): mail and meetings are searched for customers only."""
+        return select(Account.id).where(
+            Account.org_id == self.org.id, exists().where(Deal.account_id == Account.id)
+        )
+
     def customer_domains(self) -> set[str]:
-        rows = self.session.scalars(select(Account.domains).where(Account.org_id == self.org.id))
+        rows = self.session.scalars(select(Account.domains).where(Account.id.in_(self._customers())))
         return {d.lower() for domains in rows for d in domains or []}
 
     def known_emails(self) -> set[str]:
-        return set(self.session.scalars(select(Contact.email).where(Contact.org_id == self.org.id)))
+        return set(
+            self.session.scalars(
+                select(Contact.email).where(
+                    Contact.org_id == self.org.id, Contact.account_id.in_(self._customers())
+                )
+            )
+        )
 
     def internal_domains(self) -> set[str]:
         return {d.lower() for d in self.org.internal_domains}
