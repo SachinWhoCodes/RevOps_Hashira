@@ -3,7 +3,7 @@
 You are picking up a project mid-flight. A previous Claude session (Opus 5.5, another account) built
 Phases 0–5 with this user between 2026-10-10 and 2026-10-11. You have none of that conversation.
 This file is the handoff: read all of it before touching code. Last updated: 2026-10-11, after
-Phase 5 (everything up to here is committed and pushed to `origin/main`).
+Phase S (self-service) and the move to a Windows machine (§0b). Phases 0–6, C and S are committed.
 
 ---
 
@@ -12,7 +12,8 @@ Phase 5 (everything up to here is committed and pushed to `origin/main`).
 1. Read: this file → `docs/IMPLEMENTATION_PLAN.md` (§1 rules, §6 phases, esp. Phase 6–7) →
    `docs/adr/0001…0005` → `docs/RESULTS.md`. The product blueprint (46-page PDF the plan is based
    on) is at `/Users/sachinwhocodes/Downloads/Autonomous RevOps Agent — Product Blueprint.pdf`.
-2. Bring the stack up (macOS, Docker via Colima):
+2. Bring the stack up. **On the Windows machine (D:\RevOps_Hashira) read §0b first** — no `make`,
+   different port and tool paths. macOS (Docker via Colima):
    ```
    colima start                # Docker runtime; `docker compose` plugin is NOT wired → Makefile uses docker-compose
    make up                     # Postgres 16 on port 5433 + migrations on dev and test DBs
@@ -28,7 +29,39 @@ Phase 5 (everything up to here is committed and pushed to `origin/main`).
    after 2026-10-11. If Gmail writes fail with `invalid_grant`, ask the user to run
    `cd /Users/sachinwhocodes/Documents/Projects/RevOps_Hashira/backend && uv run casefile google-auth --zone write`
    (interactive browser consent; the user must do it).
-5. Then ask the user how they want to proceed (Phase 6 is next; two open decisions in §13).
+5. Then ask the user how they want to proceed (Phase 7 demo hardening is next; open decisions in §13).
+
+## 0b. Windows machine notes (from 2026-10-11, second session)
+
+The project moved to a Windows 11 laptop (`D:\RevOps_Hashira`, Git Bash + PowerShell). What differs:
+- **Docker = Rancher Desktop** (`C:\Program Files\Rancher Desktop\Rancher Desktop.exe`; start it first,
+  the engine takes ~1 min). `docker-compose` v5 works. Another project's container `hawk-postgres`
+  holds 127.0.0.1:5433 and auto-starts — never stop it. Casefile's Postgres runs on **5434**:
+  `.env` sets `CASEFILE_DB_PORT=5434`, `DATABASE_URL` and `TEST_DATABASE_URL` (compose reads the port).
+- **uv** is in `C:\Users\Lenovo\AppData\Roaming\Python\Python312\Scripts` (not on PATH). In Git Bash:
+  `export PATH="/c/Users/Lenovo/AppData/Roaming/Python/Python312/Scripts:$PATH"` (a Windows-style
+  path in PATH silently fails). **pnpm** is global via npm. **No `make`**: run the recipe's commands
+  directly, e.g. `cd backend && uv run alembic upgrade head` and
+  `uv run alembic -x url=postgresql+psycopg://casefile:casefile@127.0.0.1:5434/casefile_test upgrade head`.
+- **Use `127.0.0.1`, never `localhost`, in database URLs.** Postgres is published on IPv4 loopback only;
+  `localhost` tries `::1` first, and on Rancher/WSL that connection is not refused but hangs — psycopg
+  has no connect timeout, so tests/alembic wait forever with no error.
+- Preview configs `api`/`web` exist in `.claude/launch.json` with Windows paths (git-ignored).
+- `git config core.autocrlf=true`: the working tree has CRLF line endings (the repo stays LF). Python,
+  ruff and the tests don't care; a shell script copied into a Linux container from this tree would.
+- **The dev database here was created fresh** and seeded locally (synth seed 7, today 2026-10-11 →
+  identical company: 8 open cases, back-test numbers identical to the Mac's). Not here: the Mac's
+  executed change sets, 877-entry audit chain, AI explanations/labels, `llm_cache`, `llm_call` rows;
+  no sandbox write connections or read-back (sandbox-setup not re-run). The $2.9137 spend to date is
+  no longer queryable here; count new spend on top. No AI has run on this machine.
+- A local UI-review admin `design.review@lumora.test` exists in the dev DB (generated password, kept in
+  the session scratchpad only). Delete it or reset its password if you need to.
+- Preview config `api-no-ai` runs the API with `AI_ENABLED=false` (env file in the session scratchpad;
+  recreate it if the scratchpad is gone) — use it when clicking around so nothing can spend.
+- **`backend/tests/test_onboarding.py` is missing from git** (never committed on the Mac): suite here
+  is 330 not 341, and `test_selfserve::test_a_read_token_that_can_write_is_refused` fails importing
+  its `FakeLive`. Bring the file over from the Mac checkout.
+- The full test suite is slower here than on the Mac (Postgres goes through the WSL VM, ~9 minutes).
 
 ---
 
@@ -87,6 +120,7 @@ Gmail (drafts only), Slack → hash-chained audit log. A "time machine" back-tes
 | 6 | Level 2 differentiators (§14) | **done except 6.7** (needs Linear creds) — 6.1–6.6, 6.8; A1 (HubSpot emails/meetings), A2 (sandbox read-back), rules v4, email retention job done (ADR 0006) |
 | C | Pilot readiness (ADR 0007): hosting, team/invites, field mapping + champion fallback, row-level security, onboarding (setup → shadow → live) | done |
 | S | Self-service (ADR 0008): sign-up + Brevo email confirmation, connections pasted in the app with guides, sealed write credentials, one executor for all orgs, per-org AI caps | done (live email + Google consent need the user) |
+| U | Product UI (ADR 0009): design system, light/dark, new Overview, every page rebuilt, data tables with URL-state pagination, audit keyset paging, split-screen auth, ⌘K palette, lazy routes | done 2026-10-11 (checked in the browser on synthetic data; no automated visual tests) |
 | 7 | Demo hardening | after C |
 | 8–10 | Pilots / paid launch / scale (production) | later |
 
@@ -162,11 +196,21 @@ backend/casefile/
                        google-auth, recompute, explain, eval, evals, backtest, derive-outcomes,
                        match-report, set-password, db-roles, reapply-mapping…)
 backend/tests/         341 tests; fake_ai.py (FakeClient), fake_writers.py, factories.py, conftest.py
-frontend/src/          React 19 + Vite 7 + Tailwind 4 + TanStack Query + React Router 7
-  pages/               Queue, Approvals (Inbox), Accounts, Account (as-of time machine + PlanPanel),
-                       Backtest, Replay, BlindSpots, Identity, Connections, Audit, Settings, Login
-  components/          PlanPanel (approve/edit/reject per line), AssessmentPanel, EvidenceDrawer, …
-docs/                  IMPLEMENTATION_PLAN.md, RESULTS.md (generated), adr/0001–0005,
+frontend/src/          React 19 + Vite 7 + Tailwind 4 + TanStack Query + React Router 7 + lucide-react (ADR 0009)
+  index.css            design tokens (light + dark CSS variables), motion, base — never raw hex in components
+  components/ui/       the design system: Button, Badge, Card/PageHeader, Field/Input/Select…, Callout/
+                       EmptyState/Skeleton, Modal/Drawer/Popover/Menu/Tooltip (portals), Segmented/Tabs,
+                       StatTile/ScoreRing/Meter/Avatar, Toast — pages compose these
+  components/table/    DataTable (search/sort/columns/density/CSV/pages, state in the URL), Pagination,
+                       CursorPager (audit keyset paging)
+  components/shell/    AppShell (grouped sidebar, live counts, topbar, mode banner), CommandPalette (Ctrl K), nav.ts
+  components/auth/     AuthLayout (split screen + gradient flow), PasswordStrength
+  components/          charts.tsx (usage, risk timeline, bar list, range bars), domain.tsx (SignalChip,
+                       EvidenceChip, HonestyLabel), PlanPanel, AssessmentPanel, RiskLevers, EvidenceDrawer, …
+  pages/               Overview (home), Queue, Approvals, Accounts, Account, Outcomes, Backtest, Replay,
+                       Audit, Connections, BlindSpots, Identity, Setup (Onboarding), Team, Settings, auth pages
+  lib/                 theme, hooks (URL state, local prefs, count-up), session (useMe), csv, cn
+docs/                  IMPLEMENTATION_PLAN.md, RESULTS.md (generated), adr/0001–0009,
                        runbooks/{sandbox-setup,data-access-request}.md, spikes/README.md
 evals/datasets/        injection_suite.jsonl (30 attacks + 30 benign) — evals/results/ is git-ignored
 data/synth/default/    generated synthetic company (git-ignored)
@@ -356,7 +400,7 @@ its loop also sends the 09:00 (Asia/Kolkata) morning digest to the workspace own
 
 ---
 
-## 14. Next: Phase 6 — Level 2 differentiators (plan §6, build in order, ship each whole)
+## 14. Phase 6 — Level 2 differentiators (done except 6.7; kept for reference — see ADR 0006)
 
 1. **6.1 Outcome tracker** — `play_outcome` table already exists. After a change set executes,
    check at +7/+14/+30 days (worker job): champion replied? meeting booked? usage recovered? score

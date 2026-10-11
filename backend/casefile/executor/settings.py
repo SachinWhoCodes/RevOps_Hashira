@@ -19,7 +19,7 @@ class ExecutorSettings(BaseSettings):
         env_file=(REPO_ROOT / ".env", REPO_ROOT / ".env.executor"), extra="ignore"
     )
 
-    database_url: str = "postgresql+psycopg://casefile:casefile@localhost:5433/casefile"
+    database_url: str = "postgresql+psycopg://casefile:casefile@127.0.0.1:5433/casefile"
     org_slug: str = "lumora"
     app_base_url: str = "http://localhost:5173"
 

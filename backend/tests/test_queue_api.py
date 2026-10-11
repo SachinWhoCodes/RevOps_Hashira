@@ -75,6 +75,16 @@ def test_blind_spots_config_and_audit(client: TestClient) -> None:
     assert client.get("/api/audit?limit=5").json()
 
 
+def test_audit_pages_by_sequence_without_gaps_or_overlaps(client: TestClient) -> None:
+    whole = [r["seq"] for r in client.get("/api/audit?limit=12").json()]
+    assert len(whole) == 12 and whole == sorted(whole, reverse=True)
+    first = [r["seq"] for r in client.get("/api/audit?limit=5").json()]
+    second = [r["seq"] for r in client.get(f"/api/audit?limit=5&before_seq={first[-1]}").json()]
+    third = [r["seq"] for r in client.get(f"/api/audit?limit=2&before_seq={second[-1]}").json()]
+    assert first + second + third == whole  # newest first, each page continues where the last stopped
+    assert client.get("/api/audit?before_seq=0").status_code == 422
+
+
 def test_recompute_requires_admin_and_csrf(client: TestClient) -> None:
     assert client.post("/api/admin/recompute").status_code == 403  # no CSRF header
     assert client.post("/api/admin/recompute", headers=CSRF).json()["queued"] > 0

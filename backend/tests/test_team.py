@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 
 from casefile.api.deps import get_db
 from casefile.api.main import app
+from casefile.api.routers import team as team_router
 from casefile.db.models import AppUser, AuditLog, Org, UserInvite
+from casefile.mailer import Mail, MailError
 
 CSRF = {"x-casefile-csrf": "1"}
 ADMIN = {"email": "admin@lumora.test", "password": "test-password-1"}
@@ -72,6 +74,41 @@ def test_admin_adds_and_invites_and_the_link_works_once(client: TestClient, sync
     assert not any(
         "invite/" in str(d) for d in synced.scalars(select(AuditLog.details))
     )  # no token in the audit
+
+
+class _Mailer:
+    def __init__(self, fail: bool = False) -> None:
+        self.sent: list[Mail] = []
+        self.fail = fail
+
+    def send(self, mail: Mail) -> str:
+        if self.fail:
+            raise MailError("provider refused")
+        self.sent.append(mail)
+        return "fake"
+
+
+def test_an_emailed_invite_travels_only_in_the_email(
+    client: TestClient, synced: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    as_admin(client)
+    added = client.post("/api/team", json={"email": "mia@lumora.test", "name": "Mia"}, headers=CSRF)
+    uid = added.json()["id"]
+    down = _Mailer(fail=True)
+    monkeypatch.setattr(team_router, "get_mailer", lambda: down)
+    failed = client.post(f"/api/team/{uid}/invite", json={"send_email": True}, headers=CSRF)
+    assert failed.status_code == 503
+    # Nothing half-done: the invite that could not be sent was never stored.
+    assert synced.scalars(select(UserInvite).where(UserInvite.user_id == uid)).all() == []
+    mailer = _Mailer()
+    monkeypatch.setattr(team_router, "get_mailer", lambda: mailer)
+    sent = client.post(f"/api/team/{uid}/invite", json={"send_email": True}, headers=CSRF).json()
+    assert sent["emailed"] is True and sent["link"] is None  # the admin never sees it
+    (mail,) = mailer.sent
+    assert mail.to == "mia@lumora.test" and "invited you" in mail.subject
+    t = token_of(next(word for word in mail.text.split() if "/invite/" in word))
+    client.cookies.clear()
+    assert client.get(f"/api/auth/invite/{t}").json()["email"] == "mia@lumora.test"
 
 
 def test_expired_and_unknown_links_are_refused(client: TestClient, synced: Session) -> None:

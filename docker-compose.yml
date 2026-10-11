@@ -8,7 +8,8 @@ services:
       POSTGRES_PASSWORD: casefile
       POSTGRES_DB: casefile
     ports:
-      - "5433:5432"
+      # Localhost only. Override the port in .env if 5433 is taken (then set DATABASE_URL and TEST_DATABASE_URL).
+      - "127.0.0.1:${CASEFILE_DB_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./backend/scripts/init-test-db.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro

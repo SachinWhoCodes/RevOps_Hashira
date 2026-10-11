@@ -1,10 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowRight } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type User } from "../api";
-import { ErrorNote, Loading } from "../components/ui";
+import { AuthHeading, AuthLayout } from "../components/auth/AuthLayout";
+import { PasswordStrength } from "../components/auth/PasswordStrength";
+import { Button, ErrorNote, Field, PasswordInput, Skeleton } from "../components/ui";
 
-// Public page behind a one-time invite link: the person chooses their password and is signed in.
+// Public page behind a one-time invite (or reset) link: choose a password and you're signed in.
 export default function InvitePage() {
   const { token = "" } = useParams();
   const navigate = useNavigate();
@@ -18,44 +21,57 @@ export default function InvitePage() {
   });
   const accept = useMutation({
     mutationFn: () => api<User>(`/auth/invite/${token}`, { json: { password } }),
-    onSuccess: (user) => { qc.setQueryData(["me"], user); navigate("/"); },
+    onSuccess: (user) => {
+      qc.setQueryData(["me"], user);
+      navigate("/");
+    },
   });
   const mismatch = again.length > 0 && again !== password;
-  const submit = (e: FormEvent) => { e.preventDefault(); if (!mismatch) accept.mutate(); };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!mismatch) accept.mutate();
+  };
+  const d = details.data;
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
-      <div className="w-full max-w-sm space-y-4 rounded-lg border border-line bg-panel p-6">
-        {details.isLoading && <Loading />}
-        {details.error && <ErrorNote error={details.error} />}
-        {details.data && (
+    <AuthLayout>
+      {details.isLoading && (
+        <div className="space-y-4">
+          <Skeleton className="h-8 w-2/3" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="mt-6 h-11 w-full rounded-lg" />
+        </div>
+      )}
+      {details.error && (
+        <>
+          <AuthHeading title="This link can't be used" />
+          <ErrorNote error={details.error} title="Invite link problem" />
+          <p className="mt-6 text-sm text-muted">
+            Ask your Casefile admin for a new link, or <Link to="/forgot" className="font-medium text-accent-fg hover:underline">reset your password</Link>.
+          </p>
+        </>
+      )}
+      {d && (
+        <>
+          <AuthHeading
+            title={d.reset ? "Choose a new password" : `Join ${d.organisation}`}
+            subtitle={d.reset ? `For ${d.email} at ${d.organisation}.` : `You've been invited as ${d.email}. Choose a password to finish.`}
+          />
           <form onSubmit={submit} className="space-y-4">
-            <div>
-              <h1 className="text-lg font-semibold">{details.data.reset ? "Choose a new password" : "Welcome to Casefile"}</h1>
-              <p className="text-sm text-muted">
-                {details.data.reset
-                  ? `For ${details.data.email} at ${details.data.organisation}. 12+ characters.`
-                  : `${details.data.organisation} invited ${details.data.email}. Choose a password (12+ characters).`}
-              </p>
-            </div>
-            <input type="email" autoComplete="username" value={details.data.email} readOnly hidden />
-            <label className="block text-sm">
-              <span className="text-muted">Password</span>
-              <input type="password" autoComplete="new-password" required minLength={12} value={password} onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 w-full rounded-md border border-line px-3 py-2 outline-none focus:border-accent" />
-            </label>
-            <label className="block text-sm">
-              <span className="text-muted">Again</span>
-              <input type="password" autoComplete="new-password" required value={again} onChange={(e) => setAgain(e.target.value)}
-                className="mt-1 w-full rounded-md border border-line px-3 py-2 outline-none focus:border-accent" />
-            </label>
-            {mismatch && <p className="text-xs text-risk">The two passwords differ.</p>}
+            <input type="email" autoComplete="username" value={d.email} readOnly hidden />
+            <Field label="Password" htmlFor="pw">
+              <PasswordInput id="pw" inputSize="lg" autoFocus autoComplete="new-password" required minLength={12} value={password} onChange={(e) => setPassword(e.target.value)} />
+            </Field>
+            <PasswordStrength password={password} />
+            <Field label="Confirm password" htmlFor="pw2" error={mismatch ? "The two passwords differ." : undefined}>
+              <PasswordInput id="pw2" inputSize="lg" autoComplete="new-password" required value={again} onChange={(e) => setAgain(e.target.value)} aria-invalid={mismatch || undefined} />
+            </Field>
             {accept.error && <ErrorNote error={accept.error} />}
-            <button disabled={accept.isPending || mismatch} className="w-full rounded-md bg-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
-              {accept.isPending ? "Saving…" : "Set password and sign in"}
-            </button>
+            <Button type="submit" variant="primary" size="lg" className="w-full" disabled={mismatch} loading={accept.isPending} iconRight={accept.isPending ? undefined : ArrowRight}>
+              {accept.isPending ? "Saving" : d.reset ? "Save and sign in" : "Join and sign in"}
+            </Button>
           </form>
-        )}
-      </div>
-    </div>
+        </>
+      )}
+    </AuthLayout>
   );
 }

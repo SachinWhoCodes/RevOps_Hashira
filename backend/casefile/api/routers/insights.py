@@ -136,6 +136,7 @@ def audit_log(
     actor_type: str | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    before_seq: int | None = Query(None, ge=1, description="Keyset paging: only entries older than this one"),
     format: str = Query("json", pattern="^(json|csv|download)$"),
     db: Session = Depends(get_db),
     org: Org = Depends(current_org),
@@ -153,6 +154,8 @@ def audit_log(
         q = q.where(AuditLog.ts >= since)
     if until:
         q = q.where(AuditLog.ts <= until)
+    if before_seq:
+        q = q.where(AuditLog.seq < before_seq)
     rows = [_audit_row(r) for r in db.scalars(q.order_by(AuditLog.seq.desc()).limit(limit))]
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     if format == "csv":

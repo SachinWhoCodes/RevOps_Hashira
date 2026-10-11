@@ -1,8 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { ArrowRight } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, type User } from "../api";
-import { ErrorNote } from "../components/ui";
+import { api, ApiError, type User } from "../api";
+import { AuthHeading, AuthLayout } from "../components/auth/AuthLayout";
+import { Button, Callout, Field, Input, PasswordInput } from "../components/ui";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -20,32 +22,36 @@ export default function LoginPage() {
     e.preventDefault();
     login.mutate();
   };
+  const err = login.error;
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
-      <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-lg border border-line bg-panel p-6">
-        <div>
-          <h1 className="text-lg font-semibold">Sign in to Casefile</h1>
-          <p className="text-sm text-muted">Use your work email.</p>
-        </div>
-        <label className="block text-sm">
-          <span className="text-muted">Email</span>
-          <input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 w-full rounded-md border border-line px-3 py-2 outline-none focus:border-accent" />
-        </label>
-        <label className="block text-sm">
-          <span className="text-muted">Password</span>
-          <input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 w-full rounded-md border border-line px-3 py-2 outline-none focus:border-accent" />
-        </label>
-        {login.error && <ErrorNote error={login.error} />}
-        <button disabled={login.isPending} className="w-full rounded-md bg-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
-          {login.isPending ? "Signing in…" : "Sign in"}
-        </button>
-        <div className="flex justify-between text-sm">
-          <Link to="/forgot" className="text-accent hover:underline">Forgot password?</Link>
-          <Link to="/register" className="text-accent hover:underline">Create an account</Link>
-        </div>
+    <AuthLayout>
+      <AuthHeading title="Welcome back" subtitle="Sign in to see which accounts need you today, and why." />
+      <form onSubmit={submit} className="space-y-5">
+        <Field label="Work email" htmlFor="email">
+          <Input id="email" type="email" inputSize="lg" autoComplete="username" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
+        </Field>
+        <Field
+          label="Password"
+          htmlFor="password"
+          action={<Link to="/forgot" className="text-[13px] font-medium text-accent-fg hover:underline">Forgot password?</Link>}
+        >
+          <PasswordInput id="password" inputSize="lg" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+        </Field>
+        {err && (
+          <Callout tone="risk" title={err instanceof ApiError && err.status === 401 ? "That email and password don't match" : "Could not sign in"}>
+            {err instanceof ApiError && err.status === 401 ? "Check both and try again, or reset your password." : err.message}
+          </Callout>
+        )}
+        <Button type="submit" variant="primary" size="lg" className="w-full" loading={login.isPending} iconRight={login.isPending ? undefined : ArrowRight}>
+          {login.isPending ? "Signing in" : "Sign in"}
+        </Button>
       </form>
-    </div>
+      <div className="mt-8 border-t border-line pt-6 text-sm text-muted">
+        New to Casefile?{" "}
+        <Link to="/register" className="font-medium text-accent-fg hover:underline">
+          Set up your company
+        </Link>
+      </div>
+    </AuthLayout>
   );
 }

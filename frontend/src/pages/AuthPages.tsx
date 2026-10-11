@@ -1,43 +1,38 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, ArrowRight, Building, Globe, MailCheck, ShieldCheck, type LucideIcon } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type User } from "../api";
-import { ErrorNote, Loading } from "../components/ui";
+import { AuthHeading, AuthLayout } from "../components/auth/AuthLayout";
+import { PasswordStrength } from "../components/auth/PasswordStrength";
+import { Button, Callout, ErrorNote, Field, Input, PasswordInput, Skeleton } from "../components/ui";
 
-const field = "mt-1 w-full rounded-md border border-line px-3 py-2 outline-none focus:border-accent";
-const primary = "w-full rounded-md bg-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-60";
+type SignupConfig = { enabled: boolean; mail: "brevo" | "outbox" | "none" };
 
-export function AuthCard({ title, subtitle, children, footer }: { title: string; subtitle?: ReactNode; children: ReactNode; footer?: ReactNode }) {
+function BackToSignIn({ children = "Back to sign in" }: { children?: ReactNode }) {
   return (
-    <div className="flex min-h-screen items-center justify-center px-4 py-8">
-      <div className="w-full max-w-sm">
-        <div className="mb-4 text-center">
-          <div className="text-base font-semibold tracking-tight">Casefile</div>
-          <div className="text-xs text-faint">Evidence-first revenue agent</div>
+    <Link to="/login" className="group mt-8 inline-flex items-center gap-1.5 text-sm font-medium text-muted transition-colors hover:text-ink">
+      <ArrowLeft className="size-4 transition-transform group-hover:-translate-x-0.5" />
+      {children}
+    </Link>
+  );
+}
+
+// A calm confirmation screen: a lit icon, a headline, what to do next.
+function Done({ icon: Icon, title, children }: { icon: LucideIcon; title: string; children: ReactNode }) {
+  return (
+    <div>
+      <div className="relative mb-6 w-fit">
+        <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-indigo-500 to-cyan-400 opacity-40 blur-xl" aria-hidden />
+        <div className="relative grid size-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-cyan-400 text-white shadow-lg">
+          <Icon className="size-6" />
         </div>
-        <div className="space-y-4 rounded-lg border border-line bg-panel p-6">
-          <div>
-            <h1 className="text-lg font-semibold">{title}</h1>
-            {subtitle && <p className="text-sm text-muted">{subtitle}</p>}
-          </div>
-          {children}
-        </div>
-        {footer && <div className="mt-3 text-center text-sm text-muted">{footer}</div>}
       </div>
+      <h1 className="text-[28px] leading-tight font-semibold tracking-[-0.03em]">{title}</h1>
+      <div className="mt-3 space-y-4 text-[14.5px] leading-relaxed text-muted">{children}</div>
     </div>
   );
 }
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block text-sm">
-      <span className="text-muted">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-type SignupConfig = { enabled: boolean; mail: "brevo" | "outbox" | "none" };
 
 // Anyone can create a company; nothing exists until the emailed link is confirmed.
 export function RegisterPage() {
@@ -51,51 +46,92 @@ export function RegisterPage() {
       }),
   });
   const mismatch = form.again.length > 0 && form.again !== form.password;
-  const submit = (e: FormEvent) => { e.preventDefault(); if (!mismatch) register.mutate(); };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!mismatch) register.mutate();
+  };
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
 
   if (register.data) {
     return (
-      <AuthCard title="Check your email" footer={<Link to="/login" className="text-accent hover:underline">Back to sign in</Link>}>
-        <p className="text-sm">
-          We sent a link to <span className="font-medium">{register.data.email}</span>. Open it within 24 hours to create {form.company}.
-          Nothing is created until you confirm.
-        </p>
-        {register.data.mail === "outbox" && (
-          <p className="rounded-md bg-warn-soft px-3 py-2 text-xs text-warn">
-            Local development: no email service is configured, so the message was written to <span className="font-mono">data/outbox</span> on the server.
+      <AuthLayout>
+        <Done icon={MailCheck} title="Check your inbox">
+          <p>
+            We sent a confirmation link to <span className="font-medium text-ink">{register.data.email}</span>. Open it within 24 hours to
+            create <span className="font-medium text-ink">{form.company}</span> — nothing is created until you confirm.
           </p>
-        )}
-        <p className="text-xs text-faint">No email? Check spam, or register again to get a new link (the old one stops working).</p>
-      </AuthCard>
+          {register.data.mail === "outbox" && (
+            <Callout tone="warn" title="Local development">
+              No email service is configured, so the message was written to <code className="font-mono text-xs">data/outbox</code> on the server.
+            </Callout>
+          )}
+          <p className="text-[13px] text-faint">No email? Check spam, or register again for a new link (the old one stops working).</p>
+        </Done>
+        <BackToSignIn />
+      </AuthLayout>
     );
   }
   if (config.data && !config.data.enabled) {
-    return <AuthCard title="Registration is closed" footer={<Link to="/login" className="text-accent hover:underline">Sign in</Link>}><p className="text-sm text-muted">Ask your Casefile admin for an invite.</p></AuthCard>;
+    return (
+      <AuthLayout>
+        <AuthHeading title="Registration is closed" subtitle="This Casefile server only admits invited people. Ask your Casefile admin for an invite link." />
+        <BackToSignIn>Sign in</BackToSignIn>
+      </AuthLayout>
+    );
   }
   return (
-    <AuthCard
-      title="Create your company on Casefile"
-      subtitle="You'll confirm your email, then connect your CRM, Google and Slack yourself. Nothing is written to your tools until you switch to live."
-      footer={<>Already have an account? <Link to="/login" className="text-accent hover:underline">Sign in</Link></>}
-    >
-      <form onSubmit={submit} className="space-y-3">
-        <Field label="Company name"><input required value={form.company} onChange={set("company")} className={field} autoComplete="organization" /></Field>
-        <Field label="Your name"><input value={form.name} onChange={set("name")} className={field} autoComplete="name" /></Field>
-        <Field label="Work email"><input type="email" required value={form.email} onChange={set("email")} className={field} autoComplete="username" /></Field>
-        <Field label="Password (12+ characters)">
-          <input type="password" required minLength={12} value={form.password} onChange={set("password")} className={field} autoComplete="new-password" />
+    <AuthLayout>
+      <AuthHeading
+        title="Set up your company"
+        subtitle="Confirm your email, then connect your CRM, inbox and Slack. Casefile only reads until you decide to go live."
+      />
+      <form onSubmit={submit} className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Company" htmlFor="company">
+            <Input id="company" icon={Building} required autoFocus value={form.company} onChange={set("company")} autoComplete="organization" placeholder="Acme Inc." />
+          </Field>
+          <Field label="Your name" htmlFor="name">
+            <Input id="name" value={form.name} onChange={set("name")} autoComplete="name" placeholder="Priya Sharma" />
+          </Field>
+        </div>
+        <Field label="Work email" htmlFor="email">
+          <Input id="email" type="email" required value={form.email} onChange={set("email")} autoComplete="username" placeholder="you@company.com" />
         </Field>
-        <Field label="Password again"><input type="password" required value={form.again} onChange={set("again")} className={field} autoComplete="new-password" /></Field>
-        {mismatch && <p className="text-xs text-risk">The two passwords differ.</p>}
-        {register.error && <ErrorNote error={register.error} />}
-        {config.data?.mail === "none" && <p className="text-xs text-risk">Email is not configured on this server, so registration cannot finish.</p>}
-        <button disabled={register.isPending || mismatch || config.data?.mail === "none"} className={primary}>
-          {register.isPending ? "Sending…" : "Create account"}
-        </button>
-        <p className="text-xs text-faint">Time zone: {timezone} (change it later on the Setup page).</p>
+        <Field label="Password" htmlFor="password">
+          <PasswordInput id="password" required minLength={12} value={form.password} onChange={set("password")} autoComplete="new-password" />
+        </Field>
+        <PasswordStrength password={form.password} />
+        <Field label="Confirm password" htmlFor="again" error={mismatch ? "The two passwords differ." : undefined}>
+          <PasswordInput id="again" required value={form.again} onChange={set("again")} autoComplete="new-password" aria-invalid={mismatch || undefined} />
+        </Field>
+        {register.error && <ErrorNote error={register.error} title="Could not register" />}
+        {config.data?.mail === "none" && (
+          <Callout tone="risk" title="Email is not configured on this server">
+            Registration cannot finish until the operator sets up email delivery.
+          </Callout>
+        )}
+        <Button
+          type="submit"
+          variant="primary"
+          size="lg"
+          className="w-full"
+          loading={register.isPending}
+          iconRight={register.isPending ? undefined : ArrowRight}
+          disabled={mismatch || config.data?.mail === "none"}
+        >
+          {register.isPending ? "Sending confirmation" : "Create account"}
+        </Button>
+        <p className="flex items-center gap-1.5 text-xs text-faint">
+          <Globe className="size-3.5" /> Time zone {timezone} — change it later in setup.
+        </p>
       </form>
-    </AuthCard>
+      <div className="mt-8 border-t border-line pt-6 text-sm text-muted">
+        Already have an account?{" "}
+        <Link to="/login" className="font-medium text-accent-fg hover:underline">
+          Sign in
+        </Link>
+      </div>
+    </AuthLayout>
   );
 }
 
@@ -111,41 +147,78 @@ export function VerifyPage() {
   });
   const confirm = useMutation({
     mutationFn: () => api<User>(`/auth/verify/${token}`, { method: "POST", json: {} }),
-    onSuccess: (user) => { qc.setQueryData(["me"], user); navigate("/"); },
+    onSuccess: (user) => {
+      qc.setQueryData(["me"], user);
+      navigate("/");
+    },
   });
+  const d = details.data;
   return (
-    <AuthCard title="Confirm your email" footer={<Link to="/login" className="text-accent hover:underline">Sign in instead</Link>}>
-      {details.isLoading && <Loading />}
-      {details.error && <ErrorNote error={details.error} />}
-      {details.data && (
-        <>
-          <p className="text-sm">
-            Create <span className="font-medium">{details.data.company}</span> with <span className="font-medium">{details.data.email}</span> as its admin?
-          </p>
-          {confirm.error && <ErrorNote error={confirm.error} />}
-          <button className={primary} disabled={confirm.isPending} onClick={() => confirm.mutate()}>
-            {confirm.isPending ? "Creating…" : `Confirm and create ${details.data.company}`}
-          </button>
-        </>
+    <AuthLayout>
+      <AuthHeading title="Confirm your company" subtitle="One last step. You'll be signed in as its first admin." />
+      {details.isLoading && (
+        <div className="space-y-3">
+          <Skeleton className="h-20 w-full rounded-xl" />
+          <Skeleton className="h-11 w-full rounded-lg" />
+        </div>
       )}
-    </AuthCard>
+      {details.error && <ErrorNote error={details.error} title="This link can't be used" />}
+      {d && (
+        <div className="space-y-5">
+          <div className="flex items-center gap-4 rounded-xl border border-line bg-subtle p-4">
+            <span className="grid size-11 place-items-center rounded-xl bg-accent-soft text-lg font-semibold text-accent-fg">{d.company.trim()[0]?.toUpperCase()}</span>
+            <div className="min-w-0">
+              <div className="truncate font-semibold">{d.company}</div>
+              <div className="truncate text-[13px] text-muted">Admin: {d.name ? `${d.name} · ` : ""}{d.email}</div>
+            </div>
+          </div>
+          {confirm.error && <ErrorNote error={confirm.error} />}
+          <Button variant="primary" size="lg" className="w-full" loading={confirm.isPending} icon={confirm.isPending ? undefined : ShieldCheck} onClick={() => confirm.mutate()}>
+            {confirm.isPending ? "Creating your company" : `Create ${d.company}`}
+          </Button>
+          <p className="text-xs text-faint">Your company starts in setup mode: Casefile reads and scores data, runs no AI and writes nothing to your tools.</p>
+        </div>
+      )}
+      <BackToSignIn>Sign in instead</BackToSignIn>
+    </AuthLayout>
   );
 }
 
 export function ForgotPage() {
   const [email, setEmail] = useState("");
   const send = useMutation({ mutationFn: () => api<{ sent: boolean }>("/auth/forgot", { json: { email } }) });
+  if (send.data) {
+    return (
+      <AuthLayout>
+        <Done icon={MailCheck} title="Check your inbox">
+          <p>
+            If <span className="font-medium text-ink">{email}</span> has a Casefile account, a reset link is on its way. It works once and
+            expires in 72 hours.
+          </p>
+        </Done>
+        <BackToSignIn />
+      </AuthLayout>
+    );
+  }
   return (
-    <AuthCard title="Reset your password" footer={<Link to="/login" className="text-accent hover:underline">Back to sign in</Link>}>
-      {send.data ? (
-        <p className="text-sm">If <span className="font-medium">{email}</span> has an account, a reset link is on its way. It works once and expires in 72 hours.</p>
-      ) : (
-        <form onSubmit={(e) => { e.preventDefault(); send.mutate(); }} className="space-y-3">
-          <Field label="Work email"><input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className={field} autoComplete="username" /></Field>
-          {send.error && <ErrorNote error={send.error} />}
-          <button disabled={send.isPending} className={primary}>{send.isPending ? "Sending…" : "Email me a reset link"}</button>
-        </form>
-      )}
-    </AuthCard>
+    <AuthLayout>
+      <AuthHeading title="Reset your password" subtitle="Enter your work email and we'll send you a link to choose a new one." />
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          send.mutate();
+        }}
+        className="space-y-5"
+      >
+        <Field label="Work email" htmlFor="email">
+          <Input id="email" type="email" inputSize="lg" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" placeholder="you@company.com" />
+        </Field>
+        {send.error && <ErrorNote error={send.error} />}
+        <Button type="submit" variant="primary" size="lg" className="w-full" loading={send.isPending}>
+          {send.isPending ? "Sending" : "Email me a reset link"}
+        </Button>
+      </form>
+      <BackToSignIn />
+    </AuthLayout>
   );
 }
