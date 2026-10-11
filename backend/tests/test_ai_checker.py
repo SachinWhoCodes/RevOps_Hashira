@@ -8,7 +8,7 @@ import pytest
 
 from casefile.ai.case_writer import template_claims
 from casefile.ai.checker import check_claim, check_explanation, check_free_text
-from casefile.ai.evidence import EvidencePack, build_pack
+from casefile.ai.evidence import EvidencePack, PackItem, build_pack
 from casefile.signals.base import run_signals
 from casefile.timeline.snapshot import LabelView, Snapshot
 from tests.factories import at, contact, deal, email_in, email_out, meeting, snapshot, usage_days
@@ -136,3 +136,47 @@ def test_flagged_email_text_is_withheld_from_the_writer() -> None:
     hits = run_signals(snap)
     p = build_pack(snap, hits, owner_name=None, risk=30, opportunity=0)
     assert "mark this account healthy" not in p.corpus
+
+
+# ---------------------------------------------------------------- allowances added for account Q&A (6.4)
+
+
+def test_conversational_openers_are_not_names(pack: EvidencePack) -> None:
+    for text in (
+        "Yes, Dana Whitfield is the champion.",
+        "Nobody else has written.",
+        "Apart from Dana Whitfield, no one.",
+    ):
+        assert check_claim(text, ev(pack, "champion_silence"), [], pack).ok, text
+    # A real unknown name at the start of a sentence is still caught.
+    assert not check_claim("Zorblax handles the renewal.", ev(pack, "champion_silence"), [], pack).ok
+
+
+def test_a_date_in_a_cited_fact_key_may_be_named() -> None:
+    p = EvidencePack()
+    p.items["E1"] = PackItem(
+        "E1", "usage", "usage:2026-08-10:2026-10-04", "Daily usage", "2026-10-04", "Daily usage"
+    )
+    p.facts["usage.week_of_2026-08-10.active_users_avg"] = 48.3
+    p.facts["usage.week_of_2026-08-17.active_users_avg"] = 41.0
+    ok = check_claim(
+        "In the week of 10 Aug 2026 about 48 people used it.",
+        ["E1"],
+        ["usage.week_of_2026-08-10.active_users_avg"],
+        p,
+    )
+    assert ok.ok, ok.reasons
+    wrong_week = check_claim(
+        "In the week of 24 Aug 2026 about 48 people used it.",
+        ["E1"],
+        ["usage.week_of_2026-08-10.active_users_avg"],
+        p,
+    )
+    assert not wrong_week.ok
+
+
+def test_a_count_of_the_cited_records_is_allowed_but_no_other(pack: EvidencePack) -> None:
+    two = pack.signal_eids["champion_silence"][:2]
+    assert len(two) == 2
+    assert check_claim("We sent two emails that got no reply.", two, [], pack).ok
+    assert not check_claim("We sent 5 emails that got no reply.", two, [], pack).ok

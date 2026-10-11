@@ -103,7 +103,7 @@ def run_data_suites(session: Session, org: Org) -> list[SuiteResult]:
     from casefile.backtest.runner import run_backtest
     from casefile.evals.ai_evals import eval_injection
     from casefile.identity.evaluate import evaluate_matching
-    from casefile.scoring.evaluate import evaluate_ranking
+    from casefile.scoring.evaluate import evaluate_expansion, evaluate_ranking
 
     out = []
     truth_path = get_settings().synth_dir / "default" / "ground_truth.json"
@@ -127,6 +127,18 @@ def run_data_suites(session: Session, org: Org) -> list[SuiteResult]:
                 f"precision@10 {r.get('precision_at_10')}, AUC {r.get('auc_risk_score')} on today's queue "
                 f"({r.get('at_risk_started')} planted at-risk accounts with visible signs)",
                 r,
+            )
+        )
+        x = evaluate_expansion(session, org, truth)
+        out.append(
+            SuiteResult(
+                "expansion_vs_planted_truth",
+                EvidenceLabel.simulated,
+                f"{x['expansion_cases']} open expansion cases; recall {x['recall']} of "
+                f"{x['planted_growth_now']} planted growth stories; precision {x['precision_strict']} "
+                f"(+{x['cases_on_prior_period_growth']} on growth carried over from the last period, "
+                f"{x['cases_unexplained']} unexplained)",
+                x,
             )
         )
     inj = eval_injection(session, org, None)
@@ -180,6 +192,21 @@ def run_ai_suites(session: Session, org: Org) -> list[SuiteResult]:
             recorded=True,
         )
     )
+    from casefile.evals.qa_eval import run_qa_eval
+
+    qa = run_qa_eval(session, org, gateway)
+    out.append(
+        SuiteResult(
+            "account_qa",
+            EvidenceLabel.simulated,
+            f"{qa['passed']}/{qa['questions']} scripted questions answered with verified citations; "
+            f"{qa['sentences_verified']} sentences shown, {qa['sentences_removed']} removed by the checker; "
+            f"cost ${qa['cost_usd_observed']}",
+            {k: v for k, v in qa.items() if k != "rows"},
+            ok=qa["passed"] == qa["questions"],
+            recorded=True,
+        )
+    )
     truth_path = get_settings().synth_dir / "default" / "ground_truth.json"
     if truth_path.exists():
         lab = eval_email_labels(session, org, gateway, json.loads(truth_path.read_text()))
@@ -216,7 +243,8 @@ def to_markdown(results: list[SuiteResult], *, ai: bool) -> str:
     if not ai:
         lines += [
             "",
-            "AI suites (email labels, AI injection reader) were not run; use `casefile evals --ai`.",
+            "AI suites (email labels, AI injection reader, account Q&A) were not run; "
+            "use `casefile evals --ai`.",
         ]
     bt = next((r for r in results if r.suite == "backtest"), None)
     if bt is not None:

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from casefile.db.models import Account, AppUser, EntityType, FieldHistory, Org
+from casefile.db.models import Account, AppUser, Contact, EntityType, FieldHistory, Org
 from casefile.ingest.util import canonical_json, chunks, field_mapping
 
 
@@ -23,6 +23,7 @@ class NormalizeContext:
     touched_accounts: set[uuid.UUID] = field(default_factory=set)
     _accounts: dict[tuple[str, str], uuid.UUID | None] = field(default_factory=dict)
     _owners: dict[str, uuid.UUID | None] = field(default_factory=dict)
+    _contacts: dict[tuple[str, str], tuple[uuid.UUID, str] | None] = field(default_factory=dict)
     _history: list[dict[str, Any]] = field(default_factory=list)
 
     @property
@@ -47,6 +48,18 @@ class NormalizeContext:
                 )
             )
         return self._accounts[key]
+
+    def contact_for_crm(self, source: str, crm_id: str) -> tuple[uuid.UUID, str] | None:
+        """(contact id, email) for a CRM contact id, if we have that contact."""
+        key = (source, crm_id)
+        if self._contacts.get(key) is None:
+            row = self.session.execute(
+                select(Contact.id, Contact.email).where(
+                    Contact.org_id == self.org_id, Contact.crm_source == source, Contact.crm_id == crm_id
+                )
+            ).first()
+            self._contacts[key] = (row[0], row[1]) if row else None
+        return self._contacts[key]
 
     def remember_account(self, source: str, crm_id: str, account_id: uuid.UUID) -> None:
         self._accounts[(source, crm_id)] = account_id

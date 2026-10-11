@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from casefile.db.models import Polarity
 from casefile.signals.base import Evidence, SignalHit, day_label, iso, signal
-from casefile.timeline.snapshot import ActivityView, Snapshot
+from casefile.timeline.snapshot import ActivityView, ContactView, Snapshot
 
 LEFT_COMPANY = re.compile(
     r"\b(ha(ve|s) left|no longer (with|work|at|employed)|left the company|moved on|last day at)\b", re.I
@@ -79,7 +79,10 @@ def champion_silence(snap: Snapshot, cfg: dict[str, Any]) -> list[SignalHit]:
     known = {c.email for c in snap.contacts}
     since = snap.as_of - timedelta(days=cfg["lookback_days"])
     hits: list[SignalHit] = []
+    skip_days = cfg.get("skip_if_departed_within_days")  # v4; absent in older rule versions
     for champ in snap.contacts_with_role("champion"):
+        if skip_days and _departures(snap, champ, snap.as_of - timedelta(days=skip_days)):
+            continue  # their silence is the departure, already scored once as champion_departure
         to_champ = [e for e in emails if e.direction == "outbound" and champ.email in e.participant_emails]
         threads = {e.thread_id for e in to_champ if e.thread_id}
         # A reply is a human inbound message from the champion — or from an address we don't know
@@ -147,6 +150,58 @@ def champion_silence(snap: Snapshot, cfg: dict[str, Any]) -> list[SignalHit]:
     return hits
 
 
+def _departures(snap: Snapshot, champ: ContactView, since: datetime) -> list[tuple[str, Evidence, datetime]]:
+    """Every sign since ``since`` that this champion has left: a bounce, an "I have left" auto-reply
+    (or the AI reader's verified champion_left label), or the CRM marking them as left."""
+    found: list[tuple[str, Evidence, datetime]] = []
+    for e in _emails(snap):
+        if e.occurred_at < since:
+            continue
+        if e.extra.get("bounce") and e.extra.get("failed_recipient") == champ.email:
+            found.append(
+                (
+                    "email bounced",
+                    Evidence(
+                        "activity",
+                        str(e.id),
+                        f"Bounce: mail to {champ.email} not delivered",
+                        iso(e.occurred_at),
+                    ),
+                    e.occurred_at,
+                )
+            )
+        elif e.from_email == champ.email and (
+            (e.extra.get("auto_reply") and LEFT_COMPANY.search(f"{e.subject or ''} {e.snippet or ''}"))
+            or any(lab.label == "champion_left" and lab.status == "accepted" for lab in e.labels)
+        ):
+            found.append(
+                (
+                    "auto-reply says they left",
+                    Evidence(
+                        "activity",
+                        str(e.id),
+                        f"Auto-reply from {champ.email}: left the company",
+                        iso(e.occurred_at),
+                    ),
+                    e.occurred_at,
+                )
+            )
+    if champ.status == "left" and champ.status_since and champ.status_since >= since:
+        found.append(
+            (
+                "CRM marked them as left",
+                Evidence(
+                    "contact",
+                    f"{champ.id}:status",
+                    f"CRM: {champ.name or champ.email} marked as left",
+                    iso(champ.status_since),
+                ),
+                champ.status_since,
+            )
+        )
+    return sorted(found, key=lambda f: f[2])
+
+
 @signal(
     "champion_departure",
     Polarity.risk,
@@ -154,59 +209,12 @@ def champion_silence(snap: Snapshot, cfg: dict[str, Any]) -> list[SignalHit]:
     "Champion bounce, 'I have left' auto-reply, or CRM status left",
 )
 def champion_departure(snap: Snapshot, cfg: dict[str, Any]) -> list[SignalHit]:
-    emails = _emails(snap)
     since = snap.as_of - timedelta(days=cfg["lookback_days"])
     hits: list[SignalHit] = []
     for champ in snap.contacts_with_role("champion", active_only=False):
-        found: list[tuple[str, Evidence, Any]] = []
-        for e in emails:
-            if e.occurred_at < since:
-                continue
-            if e.extra.get("bounce") and e.extra.get("failed_recipient") == champ.email:
-                found.append(
-                    (
-                        "email bounced",
-                        Evidence(
-                            "activity",
-                            str(e.id),
-                            f"Bounce: mail to {champ.email} not delivered",
-                            iso(e.occurred_at),
-                        ),
-                        e.occurred_at,
-                    )
-                )
-            elif e.from_email == champ.email and (
-                (e.extra.get("auto_reply") and LEFT_COMPANY.search(f"{e.subject or ''} {e.snippet or ''}"))
-                or any(lab.label == "champion_left" and lab.status == "accepted" for lab in e.labels)
-            ):
-                found.append(
-                    (
-                        "auto-reply says they left",
-                        Evidence(
-                            "activity",
-                            str(e.id),
-                            f"Auto-reply from {champ.email}: left the company",
-                            iso(e.occurred_at),
-                        ),
-                        e.occurred_at,
-                    )
-                )
-        if champ.status == "left" and champ.status_since and champ.status_since >= since:
-            found.append(
-                (
-                    "CRM marked them as left",
-                    Evidence(
-                        "contact",
-                        f"{champ.id}:status",
-                        f"CRM: {champ.name or champ.email} marked as left",
-                        iso(champ.status_since),
-                    ),
-                    champ.status_since,
-                )
-            )
+        found = _departures(snap, champ, since)
         if not found:
             continue
-        found.sort(key=lambda f: f[2])
         first_day = snap.local_date(found[0][2])
         how = sorted({f[0] for f in found})
         name = champ.name or champ.email
@@ -269,3 +277,68 @@ def executive_engagement(snap: Snapshot, cfg: dict[str, Any]) -> list[SignalHit]
             )
         ]
     return []
+
+
+@signal(
+    "single_threaded",
+    Polarity.risk,
+    "email+calendar",
+    "Only one person at the customer has emailed us or met us in 60 days",
+)
+def single_threaded(snap: Snapshot, cfg: dict[str, Any]) -> list[SignalHit]:
+    since = snap.as_of - timedelta(days=cfg["lookback_days"])
+    people = {c.email: c for c in snap.contacts if c.status == "active"}
+    active: dict[str, list[ActivityView]] = {}
+    for a in snap.activities:
+        if not (since <= a.occurred_at <= snap.as_of):
+            continue
+        if a.type == "email":
+            human = a.direction == "inbound" and not a.extra.get("auto_reply") and not a.extra.get("bounce")
+            if human and a.from_email in people:
+                active.setdefault(a.from_email, []).append(a)
+        elif a.type == "meeting" and not a.cancelled:
+            for e in a.participant_emails:
+                if e in people:
+                    active.setdefault(e, []).append(a)
+    # Nobody at all is a different problem (meeting gap, champion silence); this is "one thread".
+    if not 1 <= len(active) <= cfg["max_active_people"]:
+        return []
+    (email, acts), *_ = active.items()
+    person = people[email]
+    name = person.name or email
+    others = len(people) - 1
+    last = max(acts, key=lambda a: a.occurred_at)
+    last_day = snap.local_date(last.occurred_at)
+    summary = f"Only {name} has emailed or met us in the last {cfg['lookback_days']} days; " + (
+        f"none of the other {others} known contacts has."
+        if others
+        else "no other contact at the customer is on record."
+    )
+    return [
+        SignalHit(
+            type="single_threaded",
+            polarity=Polarity.risk,
+            value=len(active),
+            summary=summary,
+            facts={
+                "person_name": name,
+                "person_role": person.role,
+                "active_people": len(active),
+                "other_known_contacts": others,
+                "lookback_days": cfg["lookback_days"],
+                "last_active_date": last_day.isoformat(),
+            },
+            evidence=tuple(
+                Evidence(
+                    "activity",
+                    str(a.id),
+                    f"{'Meeting' if a.type == 'meeting' else 'Email from'} {name} "
+                    f"({day_label(snap.local_date(a.occurred_at))})",
+                    iso(a.occurred_at),
+                )
+                for a in sorted(acts, key=lambda a: a.occurred_at, reverse=True)[:3]
+            ),
+            window_start=since,
+            window_end=snap.as_of,
+        )
+    ]

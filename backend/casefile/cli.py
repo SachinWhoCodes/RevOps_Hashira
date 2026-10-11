@@ -239,6 +239,161 @@ def recompute(account: str = typer.Option("", help="Only this account (name)."))
         session.close()
 
 
+@app.command("purge-bodies")
+def purge_bodies() -> None:
+    """Delete full email text past its retention date (snippets stay). The worker runs this too."""
+    from casefile.db.models import Org
+    from casefile.db.session import get_sessionmaker
+    from casefile.ingest.retention import purge_expired_bodies
+
+    session = get_sessionmaker()()
+    try:
+        for org in session.scalars(select(Org)).all():
+            result = purge_expired_bodies(session, org)
+            session.commit()
+            typer.echo(f"{org.slug}: {json.dumps(result)}")
+    finally:
+        session.close()
+
+
+@app.command()
+def outcomes() -> None:
+    """Outcome tracker: record and measure +7/+14/+30-day checkpoints after executed plays."""
+    from casefile.db.models import Org
+    from casefile.db.session import get_sessionmaker
+    from casefile.outcomes.tracker import plays_table, track
+
+    session = get_sessionmaker()()
+    try:
+        for org in session.scalars(select(Org)).all():
+            counts = track(session, org)
+            session.commit()
+            typer.echo(f"{org.slug}: {json.dumps(counts)}")
+            for play in plays_table(session, org):
+                cps = ", ".join(
+                    f"d{c['day']}: {c['improved']}↑ {c['no_change']}= {c['worse']}↓ {c['pending']}…"
+                    for c in play["checkpoints"]
+                )
+                typer.echo(f"  {play['play']} ({play['sets']} sets) — {cps}")
+    finally:
+        session.close()
+
+
+@app.command()
+def ask(
+    account: str = typer.Option(..., help="Account name."),
+    question: str = typer.Argument(..., help="The question, in quotes."),
+) -> None:
+    """Ask Claude about an account (read-only tools; every sentence checked). Prints the cost."""
+    from casefile.ai.gateway import AiGateway
+    from casefile.ai.qa import ask as ask_account
+    from casefile.cases.service import RecomputeContext, assess
+    from casefile.db.models import Account
+    from casefile.timeline.snapshot import AccountHistory
+
+    session, org = _org_session()
+    try:
+        acc = session.scalar(select(Account).where(Account.org_id == org.id, Account.name == account))
+        if acc is None:
+            raise typer.BadParameter(f"no account named {account!r}")
+        snap = AccountHistory.load(session, acc.id).as_of(datetime.now(UTC))
+        if snap is None:
+            raise typer.BadParameter(f"{account!r} has no data yet")
+        ctx = RecomputeContext.build(session, org)
+        result = ask_account(
+            session, AiGateway(session, org.id), snap, assess(snap, arr_fallback=ctx.arr_median), question
+        )
+        session.commit()
+        for s in result.sentences:
+            typer.echo(f"  {s['text']}  [{', '.join(e['eid'] for e in s['evidence'])}]")
+        if result.gaps:
+            typer.echo(f"  (gaps) {result.gaps}")
+        for r in result.removed:
+            typer.echo(f"  REMOVED: {r['text']} — {'; '.join(r['reasons'])}")
+        typer.echo(
+            f"ok={result.ok} error={result.error} tools={result.tools_used} turns={result.iterations} "
+            f"cached={result.cached} cost_usd={result.cost_usd:.5f}"
+        )
+    finally:
+        session.close()
+
+
+@app.command("qa-eval")
+def qa_eval() -> None:
+    """Run the scripted account questions (Phase 6.4 exit test). Costs money unless cached."""
+    from casefile.ai.gateway import AiGateway
+    from casefile.evals.qa_eval import run_qa_eval
+
+    session, org = _org_session()
+    try:
+        m = run_qa_eval(session, org, AiGateway(session, org.id))
+        for r in m["rows"]:
+            mark = "PASS" if r["passed"] else "FAIL"
+            typer.echo(
+                f"{mark} {r['id']} {r['account']}: {r.get('verified', 0)} shown, "
+                f"{r.get('removed', 0)} removed, "
+                f"tools={r.get('tools')} ${r.get('cost_usd', 0)}{' (cached)' if r.get('cached') else ''}"
+                f"{' ERROR ' + str(r['error']) if r.get('error') else ''}"
+            )
+        typer.echo(json.dumps({k: v for k, v in m.items() if k != "rows"}))
+    finally:
+        session.close()
+
+
+@app.command("link-slack")
+def link_slack(
+    email: str = typer.Option(..., help="Casefile user's email."),
+    slack_user: str = typer.Option(..., help="Their Slack member id (U…)."),
+) -> None:
+    """Link a Casefile user to their Slack account, so their clicks on approval buttons count."""
+    from casefile.audit.log import append as audit
+    from casefile.db.models import AppUser
+
+    session, org = _org_session()
+    try:
+        user = session.scalar(select(AppUser).where(AppUser.org_id == org.id, AppUser.email == email.lower()))
+        if user is None:
+            raise typer.BadParameter(f"no user {email!r}")
+        user.slack_user_id = slack_user.strip()
+        audit(
+            session,
+            org.id,
+            "user_slack_linked",
+            entity_type="user",
+            entity_id=str(user.id),
+            details={"slack_user_id": user.slack_user_id},
+        )
+        session.commit()
+        typer.echo(f"{user.email} linked to Slack user {user.slack_user_id}")
+    finally:
+        session.close()
+
+
+@app.command("db-roles")
+def db_roles(login: str = typer.Option("casefile_runtime", help="Login role the app processes use.")) -> None:
+    """Create or update the runtime database login (member of casefile_app: no UPDATE/DELETE on the
+    audit log). Password from APP_DB_PASSWORD. Run as the owner, after migrations (deploy step)."""
+    import os
+    import re
+
+    from sqlalchemy import create_engine, text
+
+    password = os.environ.get("APP_DB_PASSWORD", "")
+    # URL-safe only (what `secrets.token_urlsafe` makes): Postgres takes no bind parameters in
+    # ALTER ROLE ... PASSWORD, so the value must need no quoting at all.
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", password):
+        raise typer.BadParameter("APP_DB_PASSWORD must be 16+ URL-safe characters (A-Z a-z 0-9 _ -)")
+    if not re.fullmatch(r"[a-z_][a-z0-9_]{2,40}", login):
+        raise typer.BadParameter("invalid role name")
+    engine = create_engine(get_settings().database_url)
+    with engine.begin() as conn:
+        exists = conn.execute(text("select 1 from pg_roles where rolname = :r"), {"r": login}).first()
+        verb = "ALTER" if exists else "CREATE"
+        conn.exec_driver_sql(f"{verb} ROLE {login} LOGIN PASSWORD '{password}'")
+        conn.exec_driver_sql(f"GRANT casefile_app TO {login}")
+    typer.echo(f"{login}: {'updated' if exists else 'created'} (member of casefile_app)")
+
+
 @app.command("ranking-report")
 def ranking_report(
     truth: Path = typer.Option(None, help="ground_truth.json (default: synthetic dir)"),
@@ -358,7 +513,7 @@ def explain(
                 if c.current_assessment_id
             ]
         for aid in dict.fromkeys(ids):
-            w = explain_assessment(session, aid, gateway)
+            w = explain_assessment(session, aid, gateway, force=True)
             session.commit()
             if w is None:
                 typer.echo(f"{aid}: skipped (assessment superseded)")

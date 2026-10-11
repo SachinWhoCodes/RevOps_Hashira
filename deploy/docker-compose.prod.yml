@@ -1,0 +1,110 @@
+# Casefile on one VM. Every process gets only the secrets it needs (rule R1):
+#   api, worker   -> deploy/env/app.env          (read tokens, Anthropic key, session secret)
+#   executor      -> deploy/env/app.env + executor.env (write tokens; no other process reads them)
+#   slackbot      -> deploy/env/slackbot.env     (Slack app token only)
+# App processes log in as casefile_runtime (member of casefile_app: cannot UPDATE/DELETE the audit
+# log); only the one-shot `migrate` job uses the database owner. Nothing but Caddy is published.
+# Usage and the restore drill: deploy/README.md.
+name: casefile-prod
+
+x-runtime-db: &runtime-db
+  DATABASE_URL: postgresql+psycopg://casefile_runtime:${APP_DB_PASSWORD:?set APP_DB_PASSWORD}@db:5432/casefile
+
+x-backend: &backend
+  build: ../backend
+  image: casefile-backend:prod
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: casefile
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: casefile
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U casefile -d casefile"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build: ../backend
+    image: casefile-backend:prod
+    command: sh -c "alembic upgrade head && casefile db-roles"
+    environment:
+      DATABASE_URL: postgresql+psycopg://casefile:${POSTGRES_PASSWORD}@db:5432/casefile
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    command: uvicorn casefile.api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "*"
+    env_file: [env/app.env]
+    environment: *runtime-db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    <<: *backend
+    command: python -m casefile.worker
+    env_file: [env/app.env]
+    environment: *runtime-db
+
+  executor:
+    <<: *backend
+    command: python -m casefile.executor run
+    env_file: [env/app.env, env/executor.env]
+    environment: *runtime-db
+    profiles: ["writes"]   # off until the customer has agreed which records may be written
+
+  slackbot:
+    <<: *backend
+    command: python -m casefile.slackbot run
+    env_file: [env/slackbot.env]
+    environment: *runtime-db
+    profiles: ["slack"]
+
+  web:
+    build: ../frontend
+    image: casefile-web:prod
+    restart: unless-stopped
+    environment:
+      CASEFILE_DOMAIN: ${CASEFILE_DOMAIN:-localhost}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - caddy-data:/data
+    depends_on:
+      api:
+        condition: service_healthy
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./backup.sh:/backup.sh:ro
+      - ./backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  caddy-data:

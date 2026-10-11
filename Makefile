@@ -3,7 +3,7 @@ COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo "docker compos
 UV := cd backend && uv run
 TODAY ?= $(shell date +%Y-%m-%d)
 
-.PHONY: help up down db migrate reset synth seed bootstrap sync api worker executor executor-once sandbox-setup evals backtest web test lint fmt typecheck check e2e load
+.PHONY: help up down db migrate reset synth seed bootstrap sync api worker executor executor-once slackbot sandbox-setup evals backtest web test lint fmt typecheck check e2e load
 
 help:
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-12s %s\n", $$1, $$2}'
@@ -47,6 +47,9 @@ executor: ## Run the executor (write zone; reads .env.executor). SHADOW=1 record
 
 executor-once: ## Process approved lines once and print the outcomes
 	$(UV) python -m casefile.executor once
+
+slackbot: ## Listen for Slack approval-button clicks (Socket Mode; reads only .env.slackbot)
+	$(UV) python -m casefile.slackbot run
 
 sandbox-setup: ## Connect sandbox write tools and mirror open-case deals into the HubSpot test portal
 	$(UV) python -m casefile.executor sandbox-setup $(if $(OWNER),--owner-id $(OWNER),)

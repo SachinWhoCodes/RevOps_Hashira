@@ -48,8 +48,11 @@ class ConnectorError(Exception):
 
 
 class AuthError(ConnectorError):
-    def __init__(self, message: str) -> None:
+    """401 (token invalid or revoked) or 403 (token valid but lacks a scope)."""
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
         super().__init__(message, retryable=False)
+        self.status = status
 
 
 class NotFound(ConnectorError):

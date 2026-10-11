@@ -487,6 +487,13 @@ Build in this order and stop wherever time runs out. Each feature ships whole or
 | 6.7 | **Product-issue routing** | When evidence points at a bug, a Tier 1 item drafts a Linear issue with anonymised evidence | Issue appears in Linear after approval |
 | 6.8 | **Casefile MCP server** (if time) | Read-only `list_cases`, `get_case`, `get_evidence` tools, so Claude or ChatGPT users can query Casefile under the same permissions | Works from an MCP client |
 
+**Status (2026-10-11): 6.1–6.6 and 6.8 done (6.5's Slack approval executed and audited live; 6.8 works
+from the official MCP client over stdio); 6.7 needs Linear credentials.** See ADR 0006 for each feature's decisions
+and evidence. Exit gates: 6.1 checkpoints recorded for every executed set (observed); 6.2 shown on
+every case; 6.3 rendered + signal tested, evals delta reported; 6.4 20/20 scripted questions answered
+with verified citations (observed, $0.62); 6.6 expansion recall 89% / precision 85% on the planted
+stories (simulated).
+
 ---
 
 ### Phase 7 — Demo hardening

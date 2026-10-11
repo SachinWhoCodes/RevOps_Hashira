@@ -195,7 +195,10 @@ def sandbox_setup(
 
 
 @app.command()
-def digest(force: bool = typer.Option(False, help="Send even before the digest hour.")) -> None:
+def digest(
+    force: bool = typer.Option(False, help="Send even before the digest hour."),
+    owner: str = typer.Option("", help="Only this owner's digest (email)."),
+) -> None:
     """Send today's morning digest (once per owner per day)."""
     settings = get_executor_settings()
     session = _session(settings)
@@ -212,6 +215,7 @@ def digest(force: bool = typer.Option(False, help="Send even before the digest h
         now=datetime.now(UTC),
         hour=settings.digest_hour_local,
         force=force,
+        owner_email=owner or None,
     )
     typer.echo(json.dumps(sent, indent=2))
 

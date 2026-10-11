@@ -8,10 +8,21 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from casefile.ai import explain
 from casefile.audit.log import verify_chain
 from casefile.cases import service
 from casefile.cases.service import RecomputeContext, recompute_account, recompute_all
-from casefile.db.models import Account, AccountCase, Assessment, AuditLog, CaseKind, CaseStatus, Org
+from casefile.db.models import (
+    Account,
+    AccountCase,
+    Assessment,
+    AssessmentStatus,
+    AuditLog,
+    CaseKind,
+    CaseStatus,
+    Job,
+    Org,
+)
 from casefile.scoring import points
 from tests.conftest import TEST_TODAY
 
@@ -81,6 +92,31 @@ def test_rules_change_rechecks_open_cases(synced: Session, monkeypatch: pytest.M
     assert "updated rules" in (case.feedback_note or "")
 
 
+def test_rules_change_keeps_a_checked_explanation_when_the_evidence_is_the_same(
+    synced: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new rule version alone must not trigger a paid rewrite: same signature → carry the checked
+    claims forward and re-check them in code."""
+    acme = _acme(synced)
+    ctx = RecomputeContext.build(synced, _org(synced))
+    first = recompute_account(synced, acme.id, ctx, as_of=AS_OF)
+    stored = synced.get(Assessment, first.assessment_id)
+    assert stored is not None
+    stored.headline, stored.status = "Renewal at risk", AssessmentStatus.verified
+    stored.claims = [{"text": "placeholder", "evidence": [], "fact_keys": []}]
+    synced.flush()
+    monkeypatch.setattr(explain, "recheck_stored", lambda *a, **k: False)  # the free re-check passes
+    bumped = {**points.default_scoring(), "version": 99}
+    monkeypatch.setattr(points, "default_scoring", lambda: bumped)
+    monkeypatch.setattr(service, "default_scoring", lambda: bumped)
+    jobs_before = _count(synced, Job)
+    r = recompute_account(synced, acme.id, ctx, as_of=AS_OF)
+    assert r.status == "assessed" and r.assessment_id != first.assessment_id  # new rules → new row
+    new = synced.get(Assessment, r.assessment_id)
+    assert new is not None and new.claims == stored.claims and new.status == AssessmentStatus.verified
+    assert not r.explain_queued and _count(synced, Job) == jobs_before  # no paid rewrite
+
+
 def test_tampering_breaks_the_chain(synced: Session) -> None:
     # Even someone who can switch the trigger off cannot edit a row without detection.
     synced.execute(text("ALTER TABLE audit_log DISABLE TRIGGER audit_log_append_only"))
@@ -96,3 +132,16 @@ def test_database_refuses_audit_updates(synced: Session) -> None:
 
     with pytest.raises(DBAPIError, match="append-only"), synced.begin_nested():
         synced.execute(text("UPDATE audit_log SET action = 'x'"))
+
+
+def test_a_queued_explanation_job_never_pays_twice(synced: Session) -> None:
+    acme = _acme(synced)
+    r = recompute_account(synced, acme.id, RecomputeContext.build(synced, _org(synced)), as_of=AS_OF)
+    a = synced.get(Assessment, r.assessment_id)
+    assert a is not None
+    a.status, a.headline = AssessmentStatus.verified, "Already written"
+    a.claims = [{"text": "kept", "evidence": [], "fact_keys": []}]
+    synced.flush()
+    assert explain.explain_assessment(synced, a.id, None) is None  # already verified: nothing to do
+    assert a.claims == [{"text": "kept", "evidence": [], "fact_keys": []}]
+    assert explain.explain_assessment(synced, a.id, None, force=True) is not None  # the CLI can force

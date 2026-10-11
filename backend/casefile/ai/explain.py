@@ -56,10 +56,15 @@ def store(session: Session, a: Assessment, written: Written) -> None:
 
 
 def explain_assessment(
-    session: Session, assessment_id: uuid.UUID, gateway: AiGateway | None
+    session: Session, assessment_id: uuid.UUID, gateway: AiGateway | None, *, force: bool = False
 ) -> Written | None:
+    """Write and check the explanation. A queued job for an assessment that already has a verified
+    explanation (written meanwhile, or carried forward after a rules change) does nothing: queued
+    jobs must never pay twice. ``force`` rewrites anyway (the CLI)."""
     a = session.get(Assessment, assessment_id)
     if a is None:
+        return None
+    if not force and a.status == AssessmentStatus.verified and a.claims:
         return None
     account = session.get(Account, a.account_id)
     org = session.get(Org, a.org_id)

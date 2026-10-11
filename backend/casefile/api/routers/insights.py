@@ -195,3 +195,11 @@ def audit_log(
 @router.get("/audit/verify")
 def audit_verify(db: Session = Depends(get_db), org: Org = Depends(current_org)) -> dict[str, Any]:
     return verify_chain(db, org.id)
+
+
+@router.get("/plays")
+def plays(db: Session = Depends(get_db), org: Org = Depends(current_org)) -> dict[str, Any]:
+    """Plays that work: how executed change sets turned out at +7/+14/+30 days (measured after)."""
+    from casefile.outcomes.tracker import CHECK_DAYS, plays_table
+
+    return {"check_days": list(CHECK_DAYS), "plays": plays_table(db, org)}

@@ -120,9 +120,11 @@ def test_executor_status_and_audit_export(client: TestClient) -> None:
 class FakeSlack:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.blocks: list[list] = []
 
-    def post_text(self, user_id: str, text: str) -> str:
+    def post_text(self, user_id: str, text: str, blocks: list | None = None) -> str:
         self.sent.append((user_id, text))
+        self.blocks.append(blocks or [])
         return f"{len(self.sent)}.0"
 
 

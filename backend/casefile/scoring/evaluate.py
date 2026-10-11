@@ -16,9 +16,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from casefile.db.models import Account, Assessment, Org
+from casefile.db.models import Account, AccountCase, Assessment, CaseKind, CaseStatus, Org
 
 AT_RISK = {"silent_churn", "usage_cliff", "champion_departure", "downgrade_usage"}
+GROWTH = {"expansion", "new_team"}
 
 
 def _auc(pos: list[float], neg: list[float]) -> float | None:
@@ -91,4 +92,54 @@ def evaluate_ranking(
             for group in [[r for r in positives if r["story"] == s]]
         },
         "false_flags_by_story": dict(Counter(r["story"] for r in flagged if not r["positive"])),
+    }
+
+
+def evaluate_expansion(session: Session, org: Org, truth: dict[str, Any]) -> dict[str, Any]:
+    """Open expansion cases against the planted growth stories (synthetic truth).
+
+    Strict truth: the account's current renewal period is a growth story. Reported separately: cases
+    on accounts whose *previous* period was a growth story and whose current story has not started
+    yet (onset in the future) — they still show the growth today, so a case there is not a mistake,
+    but the planted label alone would call it one.
+    """
+    today = date.fromisoformat(truth["today"])
+    crm_ids = dict(session.execute(select(Account.id, Account.crm_id).where(Account.org_id == org.id)).all())
+    with_case = {
+        crm_ids.get(a)
+        for a in session.scalars(
+            select(AccountCase.account_id).where(
+                AccountCase.org_id == org.id,
+                AccountCase.kind == CaseKind.expansion,
+                AccountCase.status == CaseStatus.open,
+            )
+        )
+    }
+    planted, explained, other_cases, hits = 0, 0, 0, 0
+    for crm_id, t in truth["accounts"].items():
+        if t["churned_on"] or not t["periods"]:
+            continue
+        current = t["periods"][-1]
+        previous = t["periods"][-2] if len(t["periods"]) > 1 else None
+        onset = date.fromisoformat(current["onset"]) if current["onset"] else None
+        strict = current["story"] in GROWTH
+        carried = (
+            not strict
+            and previous is not None
+            and previous["story"] in GROWTH
+            and (current["story"] == "healthy" or (onset is not None and onset > today))
+        )
+        planted += strict
+        if crm_id in with_case:
+            hits += strict
+            explained += carried
+            other_cases += not strict and not carried
+    cases = len(with_case - {None})
+    return {
+        "expansion_cases": cases,
+        "planted_growth_now": planted,
+        "recall": round(hits / planted, 3) if planted else None,
+        "precision_strict": round(hits / cases, 3) if cases else None,
+        "cases_on_prior_period_growth": explained,
+        "cases_unexplained": other_cases,
     }

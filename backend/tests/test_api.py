@@ -50,7 +50,13 @@ def test_accounts_and_timeline(client: TestClient, synced: Session) -> None:
     timeline = client.get(f"/api/accounts/{acme['id']}").json()
     assert timeline["exists"] and timeline["account"]["name"] == "Acme Corp"
     assert {"gmail", "gcal", "usage"} <= set(timeline["sources"])
+    levers = timeline["assessment"]["levers"]
+    assert levers["risk_now"] == timeline["assessment"]["risk"]["score"]
+    assert all(lv["risk_after"] < levers["risk_now"] or lv["clears"] for lv in levers["levers"])
+    assert timeline["outcomes"] == [] and timeline["relationships"]["people"]  # nothing executed in tests
+    assert client.get("/api/plays").json() == {"check_days": [7, 14, 30], "plays": []}
     past = client.get(f"/api/accounts/{acme['id']}?as_of=2026-04-01").json()
+    assert past["assessment"]["levers"]["plan_play"] is None  # the time machine never shows today's plan
     assert all(e["at"] <= "2026-04-02" or e.get("scheduled") for e in past["events"])
     assert len(past["events"]) < len(timeline["events"]) or past["event_count"] < timeline["event_count"]
 

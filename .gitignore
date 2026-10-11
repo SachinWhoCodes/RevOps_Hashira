@@ -80,3 +80,8 @@ Thumbs.db
 .vscode/
 *.swp
 *~
+
+# ---------------------------------------------------------------- deployment
+# Per-process env files and database dumps on the server (templates and README are committed).
+deploy/env/*.env
+deploy/backups/

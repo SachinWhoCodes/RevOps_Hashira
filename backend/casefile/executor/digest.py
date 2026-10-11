@@ -7,14 +7,15 @@ everything ranked; only interruptions are capped. Sent at most once per owner pe
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from casefile.actions.slack_approval import digest_blocks
 from casefile.actions.targets import slack_target
 from casefile.audit.log import append as audit
 from casefile.db.models import Account, AccountCase, AppUser, Assessment, AuditLog, CaseStatus, Org
@@ -23,14 +24,15 @@ TOP_N = 3
 
 
 class DmSender(Protocol):
-    def post_text(self, user_id: str, text: str) -> str: ...
+    def post_text(self, user_id: str, text: str, blocks: list[dict[str, Any]] | None = None) -> str: ...
 
 
 @dataclass
 class Digest:
     owner: AppUser
-    text: str
+    text: str  # plain-text fallback (notifications, clients without blocks)
     case_ids: list[str]
+    blocks: list[dict[str, Any]] = field(default_factory=list)
 
 
 def build_digests(session: Session, org: Org, base_url: str) -> list[Digest]:
@@ -39,8 +41,18 @@ def build_digests(session: Session, org: Org, base_url: str) -> list[Digest]:
         .join(Account, Account.id == AccountCase.account_id)
         .join(Assessment, Assessment.id == AccountCase.current_assessment_id)
         .where(AccountCase.org_id == org.id, AccountCase.status == CaseStatus.open)
-        .order_by(Assessment.priority.desc())
     ).all()
+
+    # Revenue at risk first (by risk priority), then growth (by opportunity priority). An interruption
+    # should lead with renewals in danger; expansion cases still appear when an owner has room, and
+    # a risk-only ranking (expansion priority is zero) would never show them at all.
+    def case_rank(row: tuple[AccountCase, Account, Assessment]) -> tuple[int, float]:
+        case, _, a = row
+        if case.kind.value == "expansion":
+            return (1, -float((a.breakdown or {}).get("opportunity_priority") or 0))
+        return (0, -float(a.priority or 0))
+
+    rows = sorted(rows, key=case_rank)
     by_owner: dict[object, list[tuple[AccountCase, Account, Assessment]]] = {}
     for case, account, assessment in rows:
         if case.owner_user_id:
@@ -53,14 +65,20 @@ def build_digests(session: Session, org: Org, base_url: str) -> list[Digest]:
         top = cases[:TOP_N]
         first = owner.name.split()[0] if owner.name else "there"
         lines = [f"Good morning {first} — your top {len(top)} Casefile cases:"]
+        blocks: list[dict[str, Any]] = [{"type": "section", "text": {"type": "mrkdwn", "text": lines[0]}}]
         for i, (case, account, a) in enumerate(top, 1):
             score = a.risk_score if case.kind.value == "risk" else a.opportunity_score
             headline = a.headline or "signals to review"
             link = f"{base_url.rstrip('/')}/accounts/{account.id}"
-            lines.append(f"{i}. *{account.name}* — {headline} ({case.kind.value} {score}) <{link}|Open case>")
+            line = f"{i}. *{account.name}* — {headline} ({case.kind.value} {score})"
+            lines.append(f"{line} <{link}|Open case>")
+            # Buttons: "Approve N Tier 1 actions" when a plan is waiting, always "Open in Casefile".
+            blocks += digest_blocks(session, case, account, line, link)
         if len(cases) > TOP_N:
-            lines.append(f"…and {len(cases) - TOP_N} more in your queue.")
-        digests.append(Digest(owner, "\n".join(lines), [str(c.id) for c, _, _ in top]))
+            more = f"…and {len(cases) - TOP_N} more in your queue."
+            lines.append(more)
+            blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": more}]})
+        digests.append(Digest(owner, "\n".join(lines), [str(c.id) for c, _, _ in top], blocks))
     return digests
 
 
@@ -89,6 +107,7 @@ def send_digests(
     now: datetime,
     hour: int = 9,
     force: bool = False,
+    owner_email: str | None = None,
 ) -> list[dict[str, str]]:
     local = now.astimezone(ZoneInfo(org.timezone))
     if not force and local.hour < hour:
@@ -96,15 +115,19 @@ def send_digests(
     day = local.date().isoformat()
     sent = []
     for d in build_digests(session, org, base_url):
+        if owner_email and d.owner.email != owner_email.lower():
+            continue
         if _sent_today(session, org, d.owner, day):
             continue
         target = slack_target(session, org.id, d.owner)
         if target.user_id is None:
             continue
-        text = d.text
+        text, blocks = d.text, list(d.blocks)
         if target.substituted:
-            text = f"_Sandbox: this digest was meant for {d.owner.name}._\n" + text
-        ts = sender.post_text(target.user_id, text)
+            note = f"_Sandbox: this digest was meant for {d.owner.name}._"
+            text = f"{note}\n{text}"
+            blocks.insert(0, {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]})
+        ts = sender.post_text(target.user_id, text, blocks=blocks)
         audit(
             session,
             org.id,

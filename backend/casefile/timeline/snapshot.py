@@ -15,11 +15,14 @@ Known, accepted approximations (documented for the back-test report):
 - Which account an email belongs to is decided with today's identity knowledge. Identity is about
   who a person is, not about the outcome, so it does not leak the label.
 - A rescheduled meeting keeps only its latest time (Calendar does not give reschedule history).
+- One email or meeting can arrive twice: from the mailbox/calendar and as a copy logged in the CRM.
+  ``collapse_cross_source`` keeps one, so a signal never counts it twice.
 """
 
 from __future__ import annotations
 
 import bisect
+import re
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
@@ -46,6 +49,54 @@ from casefile.db.models import (
 from casefile.ingest.util import field_mapping
 
 UNRESOLVED = {MatchMethod.unmatched, MatchMethod.ambiguous, MatchMethod.internal_only}
+
+# When the same email/meeting comes from two sources, keep the mailbox or calendar copy: it carries
+# threads, headers and bounce details the CRM copy may not.
+SOURCE_PREFERENCE = {"gmail": 0, "gcal": 0, "hubspot": 1}
+_REPLY_PREFIX = re.compile(r"^\s*((re|fw|fwd|aw)\s*:\s*)+", re.I)
+
+
+def _subject_key(subject: str | None) -> str:
+    return " ".join(_REPLY_PREFIX.sub("", subject or "").lower().split())
+
+
+def _minute(dt: datetime) -> datetime:
+    return dt.astimezone(UTC).replace(second=0, microsecond=0)
+
+
+def collapse_cross_source(activities: list[Activity]) -> list[Activity]:
+    """Drop copies of one email or meeting that arrived from a second source.
+
+    Emails are the same when their Message-IDs match, or (when a source has no Message-ID) when
+    sender, subject and minute match. Meetings are the same when they start in the same minute and
+    share a participant. Records from one source are never collapsed with each other.
+    """
+    kept: list[Activity] = []
+    email_ids: dict[str, str] = {}
+    email_prints: dict[tuple[str, str, datetime], str] = {}
+    meetings: dict[datetime, list[tuple[str, set[str]]]] = defaultdict(list)
+    for a in sorted(activities, key=lambda a: SOURCE_PREFERENCE.get(a.source, 2)):
+        kind = a.type.value if hasattr(a.type, "value") else str(a.type)
+        if kind == "email":
+            mid = (a.dedupe_key or "").strip().strip("<>").lower()
+            sender = (a.from_email or "").lower()
+            fp = (sender, _subject_key(a.subject), _minute(a.occurred_at))
+            same_id = bool(mid) and email_ids.get(mid, a.source) != a.source
+            same_print = bool(sender) and email_prints.get(fp, a.source) != a.source
+            if same_id or same_print:
+                continue
+            if mid:
+                email_ids.setdefault(mid, a.source)
+            if sender:
+                email_prints.setdefault(fp, a.source)
+        elif kind == "meeting":
+            people = {e.lower() for e in a.participant_emails or []}
+            slot = meetings[_minute(a.occurred_at)]
+            if any(src != a.source and people & other for src, other in slot):
+                continue
+            slot.append((a.source, people))
+        kept.append(a)
+    return sorted(kept, key=lambda a: a.occurred_at)
 
 
 @dataclass(frozen=True)
@@ -244,11 +295,13 @@ class AccountHistory:
         h.won, h.lost = set(dmap["won_stages"]), set(dmap["lost_stages"])
         h.contacts = list(session.scalars(select(Contact).where(Contact.account_id == account_id)))
         h.deals = list(session.scalars(select(Deal).where(Deal.account_id == account_id)))
-        h.activities = list(
-            session.scalars(
-                select(Activity)
-                .where(Activity.account_id == account_id, Activity.match_method.not_in(UNRESOLVED))
-                .order_by(Activity.occurred_at)
+        h.activities = collapse_cross_source(
+            list(
+                session.scalars(
+                    select(Activity)
+                    .where(Activity.account_id == account_id, Activity.match_method.not_in(UNRESOLVED))
+                    .order_by(Activity.occurred_at)
+                )
             )
         )
         # AI labels from the prompt version that last read each email. The label describes content

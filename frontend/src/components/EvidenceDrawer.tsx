@@ -76,6 +76,9 @@ export function EvidenceDrawerProvider({ children }: { children: ReactNode }) {
   const open: Ctx["open"] = (e) => {
     if (e.kind === "activity") setActivityId(e.id);
     else if (e.kind === "usage") scrollTo("usage-panel");
+    // Contact evidence ids are "<contact id>:<what>": show that person in the relationship map.
+    else if (e.kind === "contact") scrollTo(document.getElementById(`person-${e.id.split(":")[0]}`) ? `person-${e.id.split(":")[0]}` : "people-panel");
+    else scrollTo("deal-panel"); // CRM fields and deals
   };
   return (
     <DrawerContext.Provider value={{ open }}>

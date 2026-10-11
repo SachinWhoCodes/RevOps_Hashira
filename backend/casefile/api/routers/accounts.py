@@ -7,10 +7,13 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
-from casefile.api.deps import current_org, get_db
+from casefile.api.deps import current_org, current_user, get_db
+from casefile.cases.levers import what_would_lower_risk
+from casefile.cases.relationships import relationship_map
 from casefile.cases.service import RecomputeContext, assess
 from casefile.db.models import (
     Account,
@@ -19,6 +22,11 @@ from casefile.db.models import (
     ActivityType,
     AppUser,
     Assessment,
+    CaseStatus,
+    ChangeItem,
+    ChangeItemStatus,
+    ChangeSet,
+    ChangeSetStatus,
     Contact,
     Deal,
     DealType,
@@ -26,6 +34,7 @@ from casefile.db.models import (
     Org,
     UsageDaily,
 )
+from casefile.outcomes.tracker import account_outcomes
 from casefile.timeline.snapshot import AccountHistory, Snapshot
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
@@ -176,6 +185,7 @@ def _activity_event(a: Any, snap: Snapshot) -> dict[str, Any]:
         "people": [names[c] for c in a.contact_ids if c in names],
         "auto_reply": bool(a.extra.get("auto_reply")),
         "bounce": bool(a.extra.get("bounce")),
+        "via": a.extra.get("via"),
         "injection_flag": a.injection_flag,
         "injection_reason": a.injection_reason,
         "injection_quote": a.injection_quote,
@@ -217,6 +227,26 @@ def account_timeline(
     cases = db.scalars(
         select(AccountCase).where(AccountCase.account_id == account_id).order_by(AccountCase.opened_at.desc())
     ).all()
+    # The open case's current plan, so "what would lower this risk?" can point at it and say which of
+    # its lines were already written to the tools.
+    plan_play, plan_done = None, frozenset[str]()
+    open_cases = [c.id for c in cases if c.status == CaseStatus.open]
+    if not as_of and open_cases:
+        plan = db.scalar(
+            select(ChangeSet)
+            .where(ChangeSet.case_id.in_(open_cases), ChangeSet.status != ChangeSetStatus.superseded)
+            .order_by(ChangeSet.created_at.desc())
+            .limit(1)
+        )
+        if plan is not None:
+            plan_play = plan.playbook_id
+            plan_done = frozenset(
+                db.scalars(
+                    select(ChangeItem.action_type).where(
+                        ChangeItem.change_set_id == plan.id, ChangeItem.status == ChangeItemStatus.succeeded
+                    )
+                )
+            )
     # The stored, checked explanation applies only to the current view and only if it was written
     # for exactly these signals (same signature); the time machine shows signals, not prose.
     explanation = None
@@ -268,6 +298,7 @@ def account_timeline(
             "seats_purchased": snap.account.seats_purchased,
         },
         "sources": sorted(snap.sources),
+        "relationships": relationship_map(snap),
         "contacts": [
             {
                 "id": str(c.id),
@@ -319,9 +350,12 @@ def account_timeline(
             },
             "signals": [h.to_dict() for h in assessed.hits],
             "blind_spots": assessed.blind_spots,
+            "levers": what_would_lower_risk(snap, assessed.hits, plan_play=plan_play, plan_done=plan_done),
             "versions": {"scoring": assessed.score.breakdown["scoring_version"]},
         },
         "explanation": explanation,
+        # What happened after executed plays (live view only; the time machine shows no plans).
+        "outcomes": [] if as_of else account_outcomes(db, account_id),
         "flagged_emails": [
             {
                 "id": str(a.id),
@@ -357,3 +391,36 @@ def account_contacts(
         {"id": str(c.id), "email": c.email, "name": c.name, "role": c.role.value, "origin": c.origin}
         for c in rows
     ]
+
+
+class AskIn(BaseModel):
+    question: str
+
+
+@router.post("/{account_id}/ask")
+def ask_about_account(
+    account_id: uuid.UUID,
+    body: AskIn,
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(current_user),
+) -> dict[str, Any]:
+    """Ask Claude about this account. Read-only tools over our data; every sentence is checked
+    against the records it cites before it is returned (Phase 6.4)."""
+    from casefile.ai.gateway import AiGateway
+    from casefile.ai.qa import ask
+
+    acc = db.get(Account, account_id)
+    if acc is None or acc.org_id != user.org_id:
+        raise HTTPException(404, "account not found")
+    org = db.get(Org, user.org_id)
+    assert org is not None
+    snap = AccountHistory.load(db, account_id).as_of(datetime.now(UTC))
+    if snap is None:
+        raise HTTPException(404, "account has no data yet")
+    ctx = RecomputeContext.build(db, org)
+    assessed = assess(
+        snap, arr_fallback=ctx.arr_median, ambiguous_records=ctx.ambiguous_by_account.get(str(account_id), 0)
+    )
+    result = ask(db, AiGateway(db, org.id), snap, assessed, body.question)
+    db.commit()
+    return result.to_dict()

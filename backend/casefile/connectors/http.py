@@ -32,7 +32,9 @@ class HttpSource:
                 self._sleep(min(2**attempt, 30))
                 continue
             if response.status_code in (401, 403):
-                raise AuthError(f"{self.name}: {response.status_code} {response.text[:200]}")
+                raise AuthError(
+                    f"{self.name}: {response.status_code} {response.text[:200]}", status=response.status_code
+                )
             if response.status_code in (404, 410):
                 raise NotFound(f"{self.name}: {response.status_code} {response.text[:200]}")
             if response.status_code == 429:

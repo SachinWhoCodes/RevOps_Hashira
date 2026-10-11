@@ -11,6 +11,7 @@ from casefile.signals.engagement import (
     champion_silence,
     executive_engagement,
     meeting_gap,
+    single_threaded,
 )
 from casefile.signals.usage import new_team_adoption, seat_saturation, usage_decline
 from tests.factories import (
@@ -244,6 +245,65 @@ def test_crm_status_left() -> None:
     contacts = [contact(DANA, "champion", status="left", status_since=at(10))]
     hits = champion_departure(snapshot(contacts=contacts), T["champion_departure"])
     assert hits and hits[0].facts["how"] == ["CRM marked them as left"]
+
+
+def test_silence_from_a_departed_champion_is_scored_once() -> None:
+    """v4: their mail bounces, so of course they don't reply — that is the departure, not a second risk."""
+    acts = [
+        email_out(at(20), DANA, thread="a"),
+        email_out(at(12), DANA, thread="b"),
+        email_in(at(12), "mailer-daemon@googlemail.com", bounce_for=DANA),
+    ]
+    snap = snapshot(activities=acts, contacts=_champ())
+    assert champion_departure(snap, T["champion_departure"])
+    assert champion_silence(snap, T["champion_silence"]) == []
+    v3 = {k: v for k, v in T["champion_silence"].items() if k != "skip_if_departed_within_days"}
+    assert champion_silence(snap, v3)  # the old rules counted it twice
+
+
+# ---------------------------------------------------------------- single_threaded
+
+AMARA = "amara@acme.test"
+
+
+def _people() -> list:
+    return [contact(DANA, "champion", name="Dana"), contact(AMARA, "user", name="Amara")]
+
+
+def test_single_threaded_when_only_one_person_engages() -> None:
+    acts = [email_in(at(10), DANA), meeting(at(30), [DANA]), email_out(at(5), AMARA)]
+    (hit,) = single_threaded(snapshot(activities=acts, contacts=_people()), T["single_threaded"])
+    assert hit.facts["person_name"] == "Dana" and hit.facts["other_known_contacts"] == 1
+    assert "none of the other 1 known contacts" in hit.summary
+    assert len(hit.evidence) == 2  # what Dana did, newest first
+
+
+def test_two_people_engaging_is_not_single_threaded() -> None:
+    acts = [email_in(at(10), DANA), meeting(at(30), [AMARA])]
+    assert single_threaded(snapshot(activities=acts, contacts=_people()), T["single_threaded"]) == []
+
+
+def test_nobody_engaging_is_left_to_the_silence_signals() -> None:
+    acts = [email_out(at(10), DANA), email_out(at(5), AMARA)]
+    assert single_threaded(snapshot(activities=acts, contacts=_people()), T["single_threaded"]) == []
+
+
+def test_auto_replies_cancelled_meetings_and_old_activity_do_not_count() -> None:
+    acts = [
+        email_in(at(10), DANA),
+        email_in(at(8), AMARA, auto_reply=True, snippet="Out of office"),
+        meeting(at(20), [AMARA], cancelled=True),
+        email_in(at(70), AMARA),  # outside the 60 days
+    ]
+    (hit,) = single_threaded(snapshot(activities=acts, contacts=_people()), T["single_threaded"])
+    assert hit.facts["person_name"] == "Dana"
+
+
+def test_single_threaded_with_nobody_else_on_record() -> None:
+    (hit,) = single_threaded(
+        snapshot(activities=[email_in(at(10), DANA)], contacts=_champ()), T["single_threaded"]
+    )
+    assert hit.facts["other_known_contacts"] == 0 and "no other contact" in hit.summary
 
 
 # ---------------------------------------------------------------- opportunity and positive

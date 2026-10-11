@@ -84,12 +84,17 @@ class SlackWriter:
                 )
         return None
 
-    def post_text(self, user_id: str, text: str) -> str:
-        """Internal notifications (morning digest) — not change items, still only from the executor."""
+    def post_text(self, user_id: str, text: str, blocks: list[dict[str, Any]] | None = None) -> str:
+        """Internal notifications (morning digest) — not change items, still only from the executor.
+        ``blocks`` may carry approval buttons; clicks go to the slackbot process, never here."""
         channel = self._channel(user_id)
-        data = self._call(
-            "chat.postMessage",
-            {"channel": channel, "text": text, "unfurl_links": False, "unfurl_media": False},
-            write=True,
-        )
+        body: dict[str, Any] = {
+            "channel": channel,
+            "text": text,
+            "unfurl_links": False,
+            "unfurl_media": False,
+        }
+        if blocks:
+            body["blocks"] = blocks
+        data = self._call("chat.postMessage", body, write=True)
         return str(data["ts"])

@@ -188,7 +188,13 @@ def reject_item(
     return item
 
 
-def approve_tier1(session: Session, user: AppUser, change_set_id: uuid.UUID) -> list[ChangeItem]:
+def approve_tier1(
+    session: Session,
+    user: AppUser,
+    change_set_id: uuid.UUID,
+    *,
+    channel: ApprovalChannel = ApprovalChannel.web,
+) -> list[ChangeItem]:
     """Approve every undecided line of Tier 0-1 as proposed. Tier 2 lines are left for one-by-one review."""
     cs = session.get(ChangeSet, change_set_id)
     if cs is None or cs.org_id != user.org_id:
@@ -202,7 +208,9 @@ def approve_tier1(session: Session, user: AppUser, change_set_id: uuid.UUID) -> 
             .order_by(ChangeItem.seq)
         )
     )
-    return [approve_item(session, user, i, comment="approved with all Tier 1 lines") for i in ids]
+    return [
+        approve_item(session, user, i, comment="approved with all Tier 1 lines", channel=channel) for i in ids
+    ]
 
 
 def retry_item(session: Session, user: AppUser, item_id: uuid.UUID) -> ChangeItem:

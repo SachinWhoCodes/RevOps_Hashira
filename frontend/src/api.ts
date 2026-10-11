@@ -67,6 +67,7 @@ export type TimelineEvent =
       people: string[];
       auto_reply: boolean;
       bounce: boolean;
+      via?: string | null;
       injection_flag: boolean;
       injection_reason: string | null;
       injection_quote: string | null;
@@ -93,6 +94,8 @@ export type Timeline = {
     seats_purchased?: number | null;
   };
   sources?: string[];
+  relationships?: RelationshipMap;
+  outcomes?: PlayOutcomeView[];
   contacts?: { id: string; name: string; email: string; title: string | null; role: string; status: string; origin: string }[];
   deals?: {
     id: string;
@@ -202,6 +205,37 @@ export type LiveAssessment = {
   priority: number;
   signals: SignalHit[];
   blind_spots: BlindSpot[];
+  levers?: Levers;
+};
+
+// "What would lower this risk?" — each change is applied to a copy of the account and re-scored
+// with the live rules (backend casefile/cases/levers.py). Not a forecast.
+export type Lever = {
+  key: string;
+  text: string;
+  detail: string;
+  clears: string[];
+  adds: string[];
+  risk_after: number;
+  change: number;
+  plays: string[];
+  in_plan: boolean;
+  direct_action: string | null;
+  done_by_plan: boolean;
+};
+
+export type LeverExpiry = { signal: string; points: number; stops_counting_on: string | null; risk_after: number; text: string };
+
+export type Levers = {
+  version: string;
+  rules: { scoring: number; thresholds: number; playbooks: string | null };
+  risk_now: number;
+  close_below: number;
+  open_at: number;
+  levers: Lever[];
+  expiries: LeverExpiry[];
+  to_close: { needed: boolean; possible: boolean; levers: string[]; risk_after: number };
+  plan_play: string | null;
 };
 
 export type BlindSpots = {
@@ -415,4 +449,98 @@ export type ReplaySaid = {
   headline: string;
   claims: Claim[];
   source: string;
+};
+
+// Relationship map (Phase 6.3): who at the customer we hear from, computed as of the viewed date.
+export type RelationshipPerson = {
+  id: string;
+  name: string;
+  email: string;
+  title: string | null;
+  role: string;
+  status: string;
+  origin: string;
+  emails_from: number;
+  emails_to: number;
+  meetings: number;
+  last_heard_from: string | null;
+  days_since_heard: number | null;
+  last_contacted: string | null;
+  next_meeting: string | null;
+  active: boolean;
+};
+
+export type RelationshipMap = {
+  window_days: number;
+  active_days: number;
+  active_people: number;
+  known_people: number;
+  people: RelationshipPerson[];
+};
+
+// Outcome tracker (Phase 6.1): what happened after an executed play. "Measured after", not cause.
+export type OutcomeState = { at: string; risk: number; opportunity: number; signals: string[]; active_people: number };
+export type OutcomeEvents = {
+  champion_replied: boolean;
+  buyer_engaged: boolean;
+  meeting_booked: boolean;
+  meeting_held: boolean;
+  next_step_set: boolean;
+  usage_change_pct: number | null;
+  customer_emails: number;
+};
+export type OutcomeMeasure = {
+  before: OutcomeState;
+  after: OutcomeState & { events: OutcomeEvents; cleared: string[]; new: string[] };
+  result: "improved" | "no_change" | "worse";
+};
+export type PlayOutcomeView = {
+  change_set_id: string;
+  play: string;
+  case_kind: string;
+  executed_at: string;
+  days_since: number;
+  checkpoints: {
+    day: number;
+    due: string;
+    result: "improved" | "no_change" | "worse" | "pending";
+    before: OutcomeState | null;
+    after: (OutcomeState & { events: OutcomeEvents; cleared: string[]; new: string[] }) | null;
+  }[];
+  so_far: OutcomeMeasure | null;
+};
+export type PlaysTable = {
+  check_days: number[];
+  plays: {
+    play: string;
+    sets: number;
+    checkpoints: {
+      day: number;
+      measured: number;
+      improved: number;
+      no_change: number;
+      worse: number;
+      pending: number;
+      median_risk_change: number | null;
+      champion_replied: number;
+      meeting_booked: number;
+    }[];
+  }[];
+};
+
+// Ask about an account (Phase 6.4): every returned sentence passed the claim checker.
+export type QaEvidence = { eid: string; kind: Evidence["kind"]; id: string; label: string; at: string | null };
+export type QaAnswer = {
+  question: string;
+  ok: boolean;
+  sentences: { text: string; evidence: QaEvidence[]; fact_keys: string[] }[];
+  removed: { text: string; reasons: string[] }[];
+  gaps: string;
+  error: string | null;
+  tools_used: string[];
+  iterations: number;
+  cost_usd: number;
+  cached: boolean;
+  model: string | null;
+  prompt_version: string | null;
 };

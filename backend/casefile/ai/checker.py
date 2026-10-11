@@ -32,6 +32,7 @@ MONTH = (
     r"|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
 )
 ISO_DATE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+KEY_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")  # inside fact keys, e.g. "week_of_2026-08-10"
 DMY = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+{MONTH}\.?(?:,?\s+(\d{{4}}))?\b")
 MDY = re.compile(rf"\b{MONTH}\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s+(\d{{4}}))?\b")
 # A number, optionally followed by a unit we check separately: a percentage must match a percentage
@@ -99,8 +100,15 @@ under unanswered until up usage use used users very was we week weeks were what 
 which while who will with within without would year years yet buyer buyers check-in monthly booked
 agenda adoption questions emailed asked asking upgrade pricing complaint complaints frustration
 competitor competitors mention mentions mentioned tone notes note task tasks call
+apart besides beyond overall neither nor among across outside inside along around toward towards
+despite unlike whereas although though instead currently meanwhile otherwise likewise similarly
+additionally separately notably specifically approximately roughly nearly almost just several
+both either none apart aside alongside throughout beside except including excluding regarding
+yes no nobody nothing noone everyone someone anyone everything something anything nowhere
 """.split()
 )
+# (The last lines are English function words that often open a sentence in an answer; they are
+# never names, so allowing them cannot let an invented person or company through.)
 ACRONYM = re.compile(r"^[A-Z]{2,6}s?$")
 WEEKDAYS = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
 
@@ -270,6 +278,14 @@ def check_claim(text: str, evidence_ids: list[str], fact_keys: list[str], pack: 
     for key in fact_keys:
         if key in pack.facts:
             collect(pack.facts[key], allowed, key)
+            # A date embedded in a fact's key ("usage.week_of_2026-08-10.active_users_avg") is
+            # what that fact is about, so the sentence may name it.
+            for y, mth, d in KEY_DATE.findall(key):
+                allowed.dates.add(date(int(y), int(mth), int(d)))
+    # A count of the records the sentence cites is verifiable by construction ("two emails", E3 E7).
+    cited = len({e for e in evidence_ids if e in pack.items})
+    if cited:
+        allowed.numbers.add(float(cited))
     for eid in evidence_ids:
         if (item := pack.items.get(eid)) is None:
             continue

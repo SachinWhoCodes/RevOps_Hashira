@@ -881,6 +881,7 @@ class PlayOutcome(Base):
     """Level 2 outcome tracker: did the signals improve after an executed change set?"""
 
     __tablename__ = "play_outcome"
+    __table_args__ = (UniqueConstraint("change_set_id", "check_day"),)
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     org_id: Mapped[uuid.UUID] = _org_fk()

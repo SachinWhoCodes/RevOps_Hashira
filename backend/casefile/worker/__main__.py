@@ -30,7 +30,9 @@ from casefile.config import get_settings
 from casefile.connectors.hubspot.live import HubSpotLive
 from casefile.db.models import Connection, ConnectionStatus, Job, JobStatus, Org, Zone
 from casefile.db.session import get_sessionmaker
+from casefile.ingest.retention import purge_expired_bodies
 from casefile.ingest.sync_runner import run_sync
+from casefile.outcomes.tracker import track
 from casefile.worker.jobs import claim, enqueue, enqueue_recompute
 
 log = structlog.get_logger()
@@ -132,6 +134,32 @@ def rescore_all() -> None:
         session.close()
 
 
+def track_outcomes() -> None:
+    """Outcome tracker (6.1): checkpoints at +7/+14/+30 days after each executed play."""
+    session = get_sessionmaker()()
+    try:
+        for org in session.scalars(select(Org)).all():
+            counts = track(session, org)
+            session.commit()
+            if counts["measured"]:
+                log.info("outcomes_measured", org=org.slug, **counts)
+    finally:
+        session.close()
+
+
+def purge_bodies() -> None:
+    """Email retention: full text past its purge date is deleted (casefile.ingest.retention)."""
+    session = get_sessionmaker()()
+    try:
+        for org in session.scalars(select(Org)).all():
+            result = purge_expired_bodies(session, org)
+            session.commit()
+            if result["emails"]:
+                log.info("retention_purge", org=org.slug, **result)
+    finally:
+        session.close()
+
+
 def main() -> None:
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(
@@ -150,6 +178,22 @@ def main() -> None:
         max_instances=1,
         coalesce=True,
         next_run_time=datetime.now(UTC) + timedelta(minutes=2),
+    )
+    scheduler.add_job(
+        track_outcomes,
+        "interval",
+        hours=1,
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(UTC) + timedelta(minutes=3),
+    )
+    scheduler.add_job(
+        purge_bodies,
+        "interval",
+        hours=6,
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(UTC) + timedelta(minutes=5),
     )
     log.info("worker_started", worker=WORKER_ID)
     scheduler.start()

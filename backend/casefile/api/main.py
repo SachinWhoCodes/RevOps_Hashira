@@ -36,3 +36,21 @@ for module in (auth, accounts, connections, identity, queue, insights, cases, ch
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/health/ready")
+def ready() -> dict[str, str]:
+    """Readiness for the load balancer / compose health check: the database answers."""
+    from fastapi import HTTPException
+    from sqlalchemy import text
+
+    from casefile.db.session import get_sessionmaker
+
+    session = get_sessionmaker()()
+    try:
+        session.execute(text("select 1"))
+    except Exception as exc:  # report, don't crash the probe
+        raise HTTPException(503, f"database unavailable: {type(exc).__name__}") from exc
+    finally:
+        session.close()
+    return {"status": "ready"}

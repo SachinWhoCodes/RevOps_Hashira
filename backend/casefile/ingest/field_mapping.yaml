@@ -27,4 +27,6 @@ hubspot:
     lost_stages: [closedlost]
     next_step_property: hs_next_step
     next_step_date_property: null
-  engagement_types: [notes, tasks, calls]   # meetings/emails come from Calendar and Gmail
+  # Emails and meetings logged in HubSpot let a company start with the CRM token alone. When Gmail or
+  # Calendar is connected too, the snapshot loader keeps one copy of each email/meeting.
+  engagement_types: [notes, tasks, calls, emails, meetings]

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from casefile.config import REPO_ROOT, get_settings
 from casefile.connectors.base import AuthError, ConnectorError, Reader
 from casefile.connectors.fixture.reader import FixtureReader
-from casefile.db.models import Account, Connection, ConnectionKind, Contact, Org, Zone
+from casefile.db.models import Account, Connection, ConnectionKind, Contact, Deal, ExternalRef, Org, Zone
 from casefile.ingest.util import field_mapping
 
 
@@ -50,6 +50,26 @@ def build_reader(conn: Connection, session: Session) -> Reader:
     if conn.kind == ConnectionKind.fixture:
         directory = Path(cfg.get("dir", "data/synth/default"))
         return FixtureReader(directory if directory.is_absolute() else REPO_ROOT / directory)
+    if conn.kind == ConnectionKind.hubspot and cfg.get("mode") == "sandbox_mirror":
+        from casefile.connectors.hubspot.mirror import MirroredDeal, SandboxMirrorReader
+
+        rows = session.execute(
+            select(ExternalRef.external_id, Deal.crm_id, Account.crm_id)
+            .join(Deal, Deal.id == ExternalRef.entity_id)
+            .outerjoin(Account, Account.id == Deal.account_id)
+            .where(
+                ExternalRef.org_id == org.id,
+                ExternalRef.entity_type == "deal",
+                ExternalRef.system == "hubspot",
+            )
+        ).all()
+        return SandboxMirrorReader(
+            _secret(conn.secret_ref or "READ_HUBSPOT_TOKEN"),
+            [
+                MirroredDeal(str(portal), str(local), str(company) if company else None)
+                for portal, local, company in rows
+            ],
+        )
     if conn.kind == ConnectionKind.hubspot:
         from casefile.connectors.hubspot.reader import HubSpotReader
 

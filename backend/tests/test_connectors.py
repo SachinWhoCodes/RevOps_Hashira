@@ -98,7 +98,7 @@ def test_hubspot_full_sync_pages_and_sets_since() -> None:
             httpx.Response(200, json={"results": [_company(2)]}),
         ]
     )
-    for obj in ("contacts", "deals", "notes", "tasks", "calls"):
+    for obj in ("contacts", "deals", "notes", "tasks", "calls", "emails", "meetings"):
         respx.get(f"{base}/crm/v3/objects/{obj}").mock(return_value=httpx.Response(200, json={"results": []}))
     reader = HubSpotReader("t", field_mapping(), http=_src("hubspot", base))
     pages = list(reader.pages({}))
@@ -119,12 +119,13 @@ def test_hubspot_incremental_uses_search_then_fetches_history() -> None:
         return_value=httpx.Response(200, json={"results": [{"id": "7"}]})
     )
     respx.get(f"{base}/crm/v3/objects/companies/7").mock(return_value=httpx.Response(200, json=_company(7)))
-    for obj in ("contacts", "deals", "notes", "tasks", "calls"):
+    objects = ("contacts", "deals", "notes", "tasks", "calls", "emails", "meetings")
+    for obj in objects:
         respx.post(f"{base}/crm/v3/objects/{obj}/search").mock(
             return_value=httpx.Response(200, json={"results": []})
         )
     since = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
-    cursor = {k: {"since": since} for k in ("companies", "contacts", "deals", "notes", "tasks", "calls")}
+    cursor = {k: {"since": since} for k in ("companies", *objects)}
     items = [
         i
         for p in HubSpotReader("t", field_mapping(), http=_src("hubspot", base)).pages(cursor)

@@ -2,8 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type Timeline, type TimelineEvent } from "../api";
+import AskPanel from "../components/AskPanel";
 import AssessmentPanel from "../components/AssessmentPanel";
+import OutcomesPanel from "../components/OutcomesPanel";
 import PlanPanel from "../components/PlanPanel";
+import RelationshipMap from "../components/RelationshipMap";
+import RiskLevers from "../components/RiskLevers";
 import UsageChart from "../components/UsageChart";
 import { Badge, ErrorNote, Loading, Panel } from "../components/ui";
 import { ago, date, dateTime, label, money } from "../format";
@@ -15,8 +19,6 @@ const FILTERS = [
   { key: "note", text: "Notes" },
   { key: "crm_change", text: "CRM changes" },
 ] as const;
-
-const roleTone = (role: string) => (role === "champion" ? "accent" : role === "economic_buyer" ? "ok" : "neutral");
 
 function EventCard({ e, asOf }: { e: TimelineEvent; asOf: Date }) {
   if (e.kind === "crm_change") {
@@ -45,6 +47,9 @@ function EventCard({ e, asOf }: { e: TimelineEvent; asOf: Date }) {
         {e.cancelled && <Badge tone="warn">cancelled</Badge>}
         {e.auto_reply && <Badge tone="warn">auto-reply</Badge>}
         {e.bounce && <Badge tone="risk">bounced</Badge>}
+        {e.via === "sandbox_mirror" && (
+          <Badge tone="accent" title="Read back from the sandbox HubSpot portal Casefile writes to">from sandbox HubSpot</Badge>
+        )}
         {e.injection_flag && <Badge tone="risk" title={e.injection_reason ?? ""}>instructions aimed at software</Badge>}
         {e.labels.map((l, i) => (
           <Badge key={i} tone={l.status === "accepted" ? "accent" : l.status === "quarantined" ? "risk" : "neutral"}
@@ -134,8 +139,14 @@ export default function AccountPage() {
       {t?.exists && t.assessment && (
         <AssessmentPanel a={t.assessment} cases={t.cases} explanation={t.explanation} asOfParam={asOfParam} accountId={t.account.id} />
       )}
+      {t?.exists && t.assessment?.levers &&
+        (t.assessment.risk.score > 0 || (!asOfParam && (t.cases ?? []).some((c) => c.status === "open"))) && (
+        <RiskLevers v={t.assessment.levers} />
+      )}
       {t?.exists && !asOfParam &&
         (t.cases ?? []).filter((c) => c.status === "open").map((c) => <PlanPanel key={c.id} caseId={c.id} accountId={t.account.id} />)}
+      {t?.exists && !asOfParam && <OutcomesPanel outcomes={t.outcomes ?? []} />}
+      {t?.exists && !asOfParam && <AskPanel key={t.account.id} accountId={t.account.id} />}
       {t?.exists && (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
           <div className="space-y-4">
@@ -148,6 +159,7 @@ export default function AccountPage() {
                 ))}
               </div>
             </Panel>
+            <div id="deal-panel" className="rounded-lg transition-shadow">
             <Panel title="Renewal deal">
               {renewal ? (
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
@@ -164,22 +176,8 @@ export default function AccountPage() {
                 <p className="text-sm text-faint">No open renewal deal.</p>
               )}
             </Panel>
-            <Panel title={`People (${t.contacts?.length ?? 0})`}>
-              <ul className="space-y-1.5 text-sm">
-                {t.contacts?.map((c) => (
-                  <li key={c.id} className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate">{c.name || c.email}</div>
-                      <div className="truncate text-xs text-faint">{c.title ?? c.email}</div>
-                    </div>
-                    <div className="flex shrink-0 gap-1">
-                      {c.status !== "active" && <Badge tone="risk">{c.status}</Badge>}
-                      {c.origin === "inferred" ? <Badge title="Seen in email/calendar, not in the CRM">not in CRM</Badge> : <Badge tone={roleTone(c.role)}>{label(c.role)}</Badge>}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </Panel>
+            </div>
+            {t.relationships && <RelationshipMap m={t.relationships} />}
             <div id="usage-panel" className="rounded-lg transition-shadow">
               <Panel title="Product usage">
                 <UsageChart weeks={t.usage_weekly ?? []} seats={t.account.seats_purchased} />

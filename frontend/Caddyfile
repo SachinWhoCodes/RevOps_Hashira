@@ -1,0 +1,30 @@
+# CASEFILE_DOMAIN: a real domain gets an automatic Let's Encrypt certificate; "localhost" gets a
+# locally trusted one (for rehearsals). The browser only ever talks to this one origin, so the session
+# cookie stays same-site and the API is never exposed directly.
+{
+	admin off
+}
+
+{$CASEFILE_DOMAIN:localhost} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		-Server
+	}
+
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

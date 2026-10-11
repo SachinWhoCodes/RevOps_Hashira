@@ -1,6 +1,6 @@
 # Points model v1 — STARTING VALUES from the blueprint (section 9), to be tuned by the back-test.
 # Bump `version` on any change; every assessment records the version it was scored with.
-version: 3
+version: 5
 
 risk_points:            # each firing signal adds these points to risk (0–100)
   champion_departure: 30
@@ -9,12 +9,15 @@ risk_points:            # each firing signal adds these points to risk (0–100)
   meeting_gap: 15
   negative_tone: 15       # v3
   missing_next_step: 10
+  single_threaded: 10     # v4
 positive_points:        # subtracted from risk
   executive_engagement: 10
 opportunity_points:     # opportunity score (0–100), scored separately from risk
   seat_saturation: 30     # v2: one opportunity signal alone no longer opens a case (alert fatigue)
   new_team_adoption: 30
-  upgrade_interest: 30    # v3
+  # v5: a customer asking to buy (seat request, upgrade or pricing question; AI-read, quote-verified)
+  # opens an expansion case on its own. Passive usage signals above still need corroboration.
+  upgrade_interest: 40
 
 # Urgency multiplies priority by how soon the renewal is (first matching row wins).
 urgency:

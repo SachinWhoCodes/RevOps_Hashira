@@ -1,6 +1,6 @@
 # Signal thresholds — STARTING HYPOTHESES from the blueprint, to be tuned by the Phase 5 back-test.
 # Changing a value changes engine behaviour: bump `version` so assessments record which rules ran.
-version: 3
+version: 4
 
 meeting_gap:
   min_days: 21              # days since the last held customer meeting
@@ -15,6 +15,7 @@ champion_silence:
   min_unanswered: 2         # outbound emails to the champion with no reply...
   min_span_days: 10         # ...where the first one is at least this old
   lookback_days: 60
+  skip_if_departed_within_days: 120   # v4: a champion who left is scored once, as champion_departure
 
 usage_decline:
   window_days: 28           # last N days vs the N days before (sudden drops)...
@@ -47,3 +48,7 @@ negative_tone:            # v3: needs the AI email reader; accepted labels only
 
 upgrade_interest:         # v3
   lookback_days: 90
+
+single_threaded:          # v4: only one person at the customer emailed or met us recently
+  lookback_days: 60
+  max_active_people: 1

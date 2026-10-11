@@ -176,7 +176,7 @@ def test_write_credentials_never_reach_the_api_or_worker() -> None:
 
     assert not [f for f in Settings.model_fields if f.startswith("write_") or "slack_bot" in f]
     probe = (
-        "import sys, casefile.api.main, casefile.worker.__main__;"
+        "import sys, casefile.api.main, casefile.worker.__main__, casefile.slackbot.__main__;"
         "print(sorted(m for m in sys.modules if m.startswith('casefile.executor')))"
     )
     out = subprocess.run(

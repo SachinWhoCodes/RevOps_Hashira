@@ -179,6 +179,7 @@ def recompute_account(
         snap, arr_fallback=ctx.arr_median, ambiguous_records=ctx.ambiguous_by_account.get(str(account_id), 0)
     )
     s = a.score
+    carried = False
     latest = session.scalar(
         select(Assessment)
         .where(Assessment.account_id == account_id)
@@ -212,7 +213,18 @@ def recompute_account(
             status=AssessmentStatus.pending,  # Phase 3 writes and checks the explanation
             engine_version=ENGINE_VERSION,
             signature=s.signature,
+            # Set here, not by the DB default (transaction start): "latest assessment" must not tie
+            # when one transaction recomputes an account twice.
+            created_at=datetime.now(UTC),
         )
+        if latest is not None and latest.signature == s.signature and latest.claims:
+            # Same signals and evidence, only the rules or scores moved: keep the checked explanation.
+            # It is re-checked in code below (free); a paid rewrite happens only if nothing survives.
+            assessment.headline, assessment.claims = latest.headline, latest.claims
+            assessment.checker_report = latest.checker_report
+            assessment.model, assessment.prompt_version = latest.model, latest.prompt_version
+            assessment.status = latest.status
+            carried = True
         session.add(assessment)
         session.flush()
         for h in a.hits:
@@ -302,7 +314,9 @@ def recompute_account(
     if has_open_case:
         from casefile.ai.explain import recheck_stored
 
-        needs_writing = result.status == "assessed" or assessment.status == AssessmentStatus.pending
+        needs_writing = (result.status == "assessed" and not carried) or (
+            assessment.status == AssessmentStatus.pending
+        )
         if not needs_writing and recheck_stored(session, assessment, snap, a):
             needs_writing = True
         if needs_writing:

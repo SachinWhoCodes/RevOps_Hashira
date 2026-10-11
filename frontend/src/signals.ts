@@ -18,6 +18,8 @@ export function chipText(s: SignalHit): string {
       return f.reason === "no_renewal_deal" ? "No renewal deal" : f.reason === "stale" ? "Next step stale" : "No next step";
     case "renewal_proximity":
       return f.overdue ? "Renewal overdue" : `Renews in ${f.days_to_renewal}d`;
+    case "single_threaded":
+      return `Single-threaded · ${f.person_name}`;
     case "executive_engagement":
       return `Buyer met ${f.days_since_meeting}d ago`;
     case "seat_saturation":
