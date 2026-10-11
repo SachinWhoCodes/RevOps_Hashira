@@ -501,6 +501,10 @@ per-organisation executor and no implicit credentials. Not yet: a real server, a
 
 ---
 
+**Renewal patterns (2026-10-12): done; see ADR 0011.** Finished renewal cycles become a per-company
+nearest-neighbour library; every client's path is compared with it on a new `/patterns` page. Simulated on
+Lumora: no clear difference from the rules at 30 and 60 days, no verdict further out. Not used to rank the queue.
+
 ### Phase 7 — Demo hardening
 
 **[F] with everyone**

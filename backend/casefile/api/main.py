@@ -16,6 +16,7 @@ from casefile.api.routers import (
     insights,
     mapping,
     onboarding,
+    patterns,
     queue,
     team,
 )
@@ -47,6 +48,7 @@ for module in (
     mapping,
     onboarding,
     connect,
+    patterns,
 ):
     app.include_router(module.router, prefix="/api")
 

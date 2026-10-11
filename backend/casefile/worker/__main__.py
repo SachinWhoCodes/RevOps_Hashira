@@ -5,8 +5,10 @@ One process, three loops (APScheduler):
 - every few seconds, run queued jobs: ``sync_connection`` (the UI's "Sync now"),
   ``recompute_account`` (accounts whose data changed), ``read_emails`` (AI email reader on new
   inbound customer email), ``write_explanation`` (AI case writer for open cases) and
-  ``plan_case`` (playbook planner; proposes a change set for approval — it never writes);
-- every 6 hours, rescore every account, because "days since" counts move even without new data.
+  ``plan_case`` (playbook planner; proposes a change set for approval — it never writes) and
+  ``train_patterns`` (renewal-pattern library, after new usage or CRM history; no AI);
+- every 6 hours, rescore every account, because "days since" counts move even without new data;
+- every day, retrain every organisation's renewal patterns (clients move along their cycles).
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from casefile.ingest.retention import purge_expired_bodies
 from casefile.ingest.sync_runner import run_sync
 from casefile.onboarding import org_mode
 from casefile.outcomes.tracker import track
+from casefile.patterns.train import train as train_patterns
 from casefile.worker.jobs import claim, enqueue, enqueue_recompute
 
 log = structlog.get_logger()
@@ -90,6 +93,7 @@ def queued_jobs() -> None:
                 "write_explanation",
                 "plan_case",
                 "reapply_mapping",
+                "train_patterns",
             ],
             WORKER_ID,
             limit=50,
@@ -133,6 +137,11 @@ def queued_jobs() -> None:
                     assert job.org_id is not None
                     reapply(session, job.org_id, uuid.UUID(uid) if uid else None)
                     _finish(session, job, True, None)
+                elif job.kind == "train_patterns":
+                    org = session.get(Org, job.org_id)
+                    assert org is not None
+                    train_patterns(session, org)
+                    _finish(session, job, True, None)
                 elif job.kind == "plan_case":
                     gateway = AiGateway(session, job.org_id) if job.org_id else None
                     plan_case(
@@ -162,6 +171,18 @@ def rescore_all() -> None:
         for org in session.scalars(select(Org)).all():
             totals = recompute_all(session, org)
             log.info("rescored", org=org.slug, **totals)
+    finally:
+        session.close()
+
+
+def retrain_patterns() -> None:
+    """Daily: every client is a day further along its cycle, and decisions may have landed."""
+    session = get_sessionmaker()()
+    try:
+        for org in session.scalars(select(Org)).all():
+            model = train_patterns(session, org)
+            session.commit()
+            log.info("patterns_trained", org=org.slug, status=model.status, **model.stats)
     finally:
         session.close()
 
@@ -221,6 +242,14 @@ def main() -> None:
         max_instances=1,
         coalesce=True,
         next_run_time=datetime.now(UTC) + timedelta(minutes=3),
+    )
+    scheduler.add_job(
+        retrain_patterns,
+        "interval",
+        hours=24,
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(UTC) + timedelta(minutes=10),
     )
     scheduler.add_job(
         purge_bodies,

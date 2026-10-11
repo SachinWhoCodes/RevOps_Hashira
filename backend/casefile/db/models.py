@@ -899,6 +899,73 @@ class BacktestResult(Base):
     baseline_scores: Mapped[dict[str, Any]] = mapped_column(default=dict)
 
 
+class PatternModel(Base):
+    """One training of an organisation's renewal-pattern library (casefile.patterns).
+
+    Every finished renewal cycle is described at fixed distances from its decision (cycle_pattern);
+    each current client's path is compared with them (pattern_match). Training is pure code: no AI.
+    """
+
+    __tablename__ = "pattern_model"
+    __table_args__ = (UniqueConstraint("org_id", "version"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = _org_fk()
+    version: Mapped[int]
+    status: Mapped[str] = mapped_column(String(16))  # no_history | learning | ready | failed
+    label: Mapped[EvidenceLabel] = mapped_column(_enum(EvidenceLabel))
+    engine_version: Mapped[str] = mapped_column(String(64))
+    params: Mapped[dict[str, Any]] = mapped_column(default=dict)  # k, stages: weights, spreads, base rates
+    stats: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    evaluation: Mapped[dict[str, Any]] = mapped_column(default=dict)  # matching vs rules, held out
+    error: Mapped[str | None] = mapped_column(Text)
+    trained_at: Mapped[datetime]
+    created_at: Mapped[datetime] = _created()
+
+
+class CyclePattern(Base):
+    """A finished renewal cycle (start → decision) and its pattern at each checkpoint before the end."""
+
+    __tablename__ = "cycle_pattern"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    org_id: Mapped[uuid.UUID] = _org_fk()
+    model_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pattern_model.id", ondelete="CASCADE"), index=True
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account.id", ondelete="CASCADE"))
+    outcome_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("renewal_outcome.id", ondelete="SET NULL")
+    )
+    cycle_start: Mapped[date | None] = mapped_column(Date)
+    cycle_end: Mapped[date] = mapped_column(Date)
+    decided_at: Mapped[datetime | None]  # when the outcome became known (may differ from the end)
+    outcome: Mapped[str] = mapped_column(String(32))
+    arr_before: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    arr_after: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    points: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"30": {"at": iso, "f": {...}}, ...}
+
+
+class PatternMatch(Base):
+    """A current client's open cycle compared with the finished ones, as of the training."""
+
+    __tablename__ = "pattern_match"
+    __table_args__ = (UniqueConstraint("model_id", "account_id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    org_id: Mapped[uuid.UUID] = _org_fk()
+    model_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pattern_model.id", ondelete="CASCADE"))
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("account.id", ondelete="CASCADE"))
+    computed_at: Mapped[datetime]
+    renewal_date: Mapped[date | None] = mapped_column(Date)
+    days_to_renewal: Mapped[int | None]
+    stage: Mapped[int | None]
+    verdict: Mapped[str | None] = mapped_column(String(16))  # lost_like | mixed | renewed_like
+    lost: Mapped[int | None]  # lost cycles among the nearest
+    k: Mapped[int | None]
+    detail: Mapped[dict[str, Any]] = mapped_column(default=dict)  # path, neighbours, differences, note
+
+
 class EvalRun(Base):
     __tablename__ = "eval_run"
 

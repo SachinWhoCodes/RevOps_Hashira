@@ -34,6 +34,11 @@
   --c-ok-fg: #17754a;
   --c-ok-soft: #e8f6ee;
 
+  /* Activity channels on timelines (identity, not status; validated as a set, light and dark). */
+  --c-ch-meet: #0d9488;
+  --c-ch-sent: #5b5bd6;
+  --c-ch-received: #db2777;
+
   --sh-xs: 0 1px 2px rgb(15 20 30 / 0.04);
   --sh-sm: 0 1px 2px rgb(15 20 30 / 0.04), 0 1px 3px rgb(15 20 30 / 0.04);
   --sh-md: 0 6px 16px -4px rgb(15 20 30 / 0.08), 0 2px 4px -2px rgb(15 20 30 / 0.05);
@@ -68,6 +73,10 @@
   --c-ok-fg: #5fd69a;
   --c-ok-soft: #0e2a1c;
 
+  --c-ch-meet: #0d9488;
+  --c-ch-sent: #7171ee;
+  --c-ch-received: #ec4899;
+
   --sh-xs: 0 1px 2px rgb(0 0 0 / 0.3);
   --sh-sm: 0 1px 2px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.25);
   --sh-md: 0 8px 20px -6px rgb(0 0 0 / 0.55), 0 2px 6px -2px rgb(0 0 0 / 0.4);
@@ -97,6 +106,9 @@
   --color-ok: var(--c-ok);
   --color-ok-fg: var(--c-ok-fg);
   --color-ok-soft: var(--c-ok-soft);
+  --color-ch-meet: var(--c-ch-meet);
+  --color-ch-sent: var(--c-ch-sent);
+  --color-ch-received: var(--c-ch-received);
 
   --shadow-xs: var(--sh-xs);
   --shadow-sm: var(--sh-sm);
@@ -128,6 +140,10 @@
   --animate-ring-fill: ring-fill 1s var(--ease-out-expo) both;
   --animate-grow-x: grow-x 0.8s var(--ease-out-expo) both;
   --animate-grow-y: grow-y 0.7s var(--ease-out-expo) both;
+  --animate-draw: draw 1.2s var(--ease-out-expo) both;
+  --animate-pop: pop 0.45s var(--ease-out-expo) both;
+  --animate-breathe: breathe 2.4s ease-in-out infinite;
+  --animate-fly-in: fly-in 0.9s var(--ease-out-expo) both;
 
   /* Rings and bars grow from empty to their value once, on mount (the value itself is static CSS). */
   @keyframes ring-fill {
@@ -138,6 +154,25 @@
   }
   @keyframes grow-y {
     from { transform: scaleY(0); }
+  }
+  /* Lines that draw themselves: give the path pathLength="1" and stroke-dasharray 1. */
+  @keyframes draw {
+    from { stroke-dashoffset: 1; }
+    to { stroke-dashoffset: 0; }
+  }
+  /* SVG marks that pop in from their own centre (pair with transform-box: fill-box). */
+  @keyframes pop {
+    from { opacity: 0; transform: scale(0); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  /* Marks that travel from a shared origin to their place (set --fx/--fy: origin minus final position). */
+  @keyframes fly-in {
+    from { opacity: 0; transform: translate(var(--fx, 0), var(--fy, 0)) scale(0.4); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: 0.55; transform: scale(1); }
+    50% { opacity: 0; transform: scale(2.4); }
   }
 
   @keyframes fade-in {

@@ -12,6 +12,7 @@ import {
   Target,
   Unlink,
   UsersRound,
+  Waypoints,
   type LucideIcon,
 } from "lucide-react";
 
@@ -31,6 +32,7 @@ export const NAV: NavItem[] = [
   { to: "/queue", label: "Queue", icon: Target, group: "Workspace", hint: "Open cases, ranked by revenue at stake", badge: "queue" },
   { to: "/approvals", label: "Approvals", icon: Inbox, group: "Workspace", hint: "Proposed actions waiting for a decision", badge: "approvals" },
   { to: "/accounts", label: "Accounts", icon: Building, group: "Workspace", hint: "Every customer, with renewal and activity" },
+  { to: "/patterns", label: "Renewal patterns", icon: Waypoints, group: "Workspace", hint: "Each client's path compared with renewals that already ended" },
   { to: "/outcomes", label: "Outcomes", icon: Activity, group: "Proof", hint: "What happened after approved plays" },
   { to: "/backtest", label: "Back-test", icon: FlaskConical, group: "Proof", hint: "How Casefile would have done on past renewals" },
   { to: "/audit", label: "Audit log", icon: ScrollText, group: "Proof", hint: "A tamper-evident record of every step" },

@@ -23,11 +23,15 @@ def enqueue(
     *,
     org_id: uuid.UUID | None = None,
     dedupe_key: str | None = None,
+    run_after: datetime | None = None,
 ) -> None:
     """Add a job. A job with the same (kind, dedupe_key) already waiting is not duplicated."""
+    values: dict[str, Any] = {"org_id": org_id, "kind": kind, "payload": payload, "dedupe_key": dedupe_key}
+    if run_after is not None:
+        values["run_after"] = run_after
     session.execute(
         insert(Job)
-        .values(org_id=org_id, kind=kind, payload=payload, dedupe_key=dedupe_key)
+        .values(**values)
         .on_conflict_do_nothing(index_elements=["kind", "dedupe_key"], index_where=QUEUED_DEDUPE)
     )
 

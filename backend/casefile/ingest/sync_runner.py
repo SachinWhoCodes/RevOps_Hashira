@@ -5,7 +5,7 @@ from __future__ import annotations
 import traceback
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlalchemy.dialects.postgresql import insert
@@ -13,12 +13,29 @@ from sqlalchemy.orm import Session
 
 from casefile.ai.injection import scan_injections
 from casefile.connectors.base import ConnectorError, RawItem, Reader
-from casefile.db.models import Connection, ConnectionStatus, Org, RawRecord, SyncRun, SyncStatus
+from casefile.db.models import (
+    Connection,
+    ConnectionKind,
+    ConnectionStatus,
+    Org,
+    RawRecord,
+    SyncRun,
+    SyncStatus,
+)
 from casefile.identity.resolver import relink_crm_refs, resolve_identities
 from casefile.ingest.context import NormalizeContext
 from casefile.ingest.normalize import normalize
 from casefile.ingest.util import chunks, payload_hash
 from casefile.worker.jobs import enqueue, enqueue_recompute
+
+# Sources whose new records can change renewal patterns (usage, deal history); mail alone does not
+# finish a cycle, so it waits for the daily retrain.
+PATTERN_SOURCES = {
+    ConnectionKind.usage_csv,
+    ConnectionKind.usage_sql,
+    ConnectionKind.fixture,
+    ConnectionKind.hubspot,
+}
 
 log = structlog.get_logger()
 
@@ -99,6 +116,17 @@ def run_sync(
                 {"org_id": str(org.id)},
                 org_id=org.id,
                 dedupe_key=f"read_emails:{org.id}",
+            )
+        if run.records_new and conn.kind in PATTERN_SOURCES:
+            # New usage or CRM history: learn the renewal patterns again (no AI). Waits two minutes so
+            # a burst of syncs trains once.
+            enqueue(
+                session,
+                "train_patterns",
+                {"org_id": str(org.id)},
+                org_id=org.id,
+                dedupe_key=f"train_patterns:{org.id}",
+                run_after=datetime.now(UTC) + timedelta(minutes=2),
             )
         now = datetime.now(UTC)
         conn.last_success_at, conn.status = now, ConnectionStatus.active

@@ -862,6 +862,34 @@ def backtest(
         session.close()
 
 
+@app.command("train-patterns")
+def train_patterns_cmd(
+    org: str = typer.Option("", help="Organisation slug (default: every organisation)."),
+) -> None:
+    """Learn renewal patterns from finished cycles and match every current client (no AI, no cost)."""
+    from casefile.db.models import Org
+    from casefile.db.session import get_sessionmaker
+    from casefile.patterns.train import train
+
+    session = get_sessionmaker()()
+    try:
+        query = select(Org).order_by(Org.slug)
+        orgs = session.scalars(query.where(Org.slug == org) if org else query).all()
+        if org and not orgs:
+            raise typer.BadParameter(f"organisation {org!r} not found")
+        for row in orgs:
+            model = train(session, row)
+            session.commit()
+            typer.echo(
+                json.dumps(
+                    {"org": row.slug, "version": model.version, "status": model.status, **model.stats},
+                    default=str,
+                )
+            )
+    finally:
+        session.close()
+
+
 @app.command()
 def evals(
     ai: bool = typer.Option(

@@ -16,6 +16,7 @@ const QueuePage = lazy(() => import("./pages/QueuePage"));
 const InboxPage = lazy(() => import("./pages/InboxPage"));
 const OutcomesPage = lazy(() => import("./pages/OutcomesPage"));
 const BacktestPage = lazy(() => import("./pages/BacktestPage"));
+const PatternsPage = lazy(() => import("./pages/PatternsPage"));
 const ReplayPage = lazy(() => import("./pages/ReplayPage"));
 const BlindSpotsPage = lazy(() => import("./pages/BlindSpotsPage"));
 const AuditPage = lazy(() => import("./pages/AuditPage"));
@@ -76,6 +77,7 @@ export default function App() {
           <Route path="/settings" element={page(<SettingsPage />)} />
           <Route path="/team" element={page(<TeamPage />)} />
           <Route path="/accounts" element={page(<AccountsPage />)} />
+          <Route path="/patterns" element={page(<PatternsPage />)} />
           <Route path="/accounts/:id" element={page(<AccountPage />)} />
           <Route path="/connections" element={page(<ConnectionsPage />)} />
           <Route path="/identity" element={page(<IdentityPage />)} />

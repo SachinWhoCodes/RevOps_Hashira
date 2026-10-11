@@ -2,8 +2,10 @@
 
 You are picking up a project mid-flight. A previous Claude session (Opus 5.5, another account) built
 Phases 0–5 with this user between 2026-10-10 and 2026-10-11. You have none of that conversation.
-This file is the handoff: read all of it before touching code. Last updated: 2026-10-11, after
-Phase S (self-service) and the move to a Windows machine (§0b). Phases 0–6, C and S are committed.
+This file is the handoff: read all of it before touching code. Last updated: 2026-10-11 22:15 IST,
+on the Mac, after ADR 0010 (real-data readiness). Phases 0–6, C, S, U and R are committed (`3e21fcd`).
+**The Mac checkout is the primary one**: its dev DB holds the executed change sets, the audit chain,
+all AI history and the real-data orgs. §0b describes a second Windows checkout with a fresh DB.
 
 ---
 
@@ -17,7 +19,7 @@ Phase S (self-service) and the move to a Windows machine (§0b). Phases 0–6, C
    ```
    colima start                # Docker runtime; `docker compose` plugin is NOT wired → Makefile uses docker-compose
    make up                     # Postgres 16 on port 5433 + migrations on dev and test DBs
-   make test                   # expect 360 passed in ~90 s
+   make test                   # expect 377 passed in ~2 min
    ```
 3. Dev servers: `make api` (:8000) and `make web` (:5173), or in the Claude desktop app use the
    preview launch configs `api` / `web` in `.claude/launch.json` (absolute paths on purpose; `.claude/`
@@ -58,9 +60,8 @@ The project moved to a Windows 11 laptop (`D:\RevOps_Hashira`, Git Bash + PowerS
   the session scratchpad only). Delete it or reset its password if you need to.
 - Preview config `api-no-ai` runs the API with `AI_ENABLED=false` (env file in the session scratchpad;
   recreate it if the scratchpad is gone) — use it when clicking around so nothing can spend.
-- **`backend/tests/test_onboarding.py` is missing from git** (never committed on the Mac): suite here
-  is 330 not 341, and `test_selfserve::test_a_read_token_that_can_write_is_refused` fails importing
-  its `FakeLive`. Bring the file over from the Mac checkout.
+- `backend/tests/test_onboarding.py` was missing from git; it was committed in `3e21fcd` (Mac) —
+  `git pull` on the Windows checkout, then expect 360 tests.
 - The full test suite is slower here than on the Mac (Postgres goes through the WSL VM, ~9 minutes).
 
 ---
@@ -95,7 +96,8 @@ Gmail (drafts only), Slack → hash-chained audit log. A "time machine" back-tes
 - **Minimise Anthropic API spend in testing**: automated tests never call the API (fake clients);
   live checks use the smallest useful sample; rely on the `llm_cache`; dev budget
   `AI_DAILY_BUDGET_USD=2`; report observed spend from `llm_call`; **ask before larger runs**.
-  Total spend to date: **$2.9137** (observed 2026-10-11, `select sum(cost_usd) from llm_call`).
+  Total spend to date: **$3.0531** (observed 2026-10-11 22:00 IST on the Mac, 3,227 calls,
+  `select sum(cost_usd) from llm_call`; the last call was ONEWHO's shadow start at 13:30 UTC).
 - **Secrets**: never print, echo, paste or commit tokens/passwords. Never edit `.env*` with shell
   `echo >>` (it once corrupted the API key line — no trailing newline). Use the CLI `_set_env`
   helper or a newline-safe Python script.
@@ -121,7 +123,9 @@ Gmail (drafts only), Slack → hash-chained audit log. A "time machine" back-tes
 | C | Pilot readiness (ADR 0007): hosting, team/invites, field mapping + champion fallback, row-level security, onboarding (setup → shadow → live) | done |
 | S | Self-service (ADR 0008): sign-up + Brevo email confirmation, connections pasted in the app with guides, sealed write credentials, one executor for all orgs, per-org AI caps | done (live email + Google consent need the user) |
 | U | Product UI (ADR 0009): design system, light/dark, new Overview, every page rebuilt, data tables with URL-state pagination, audit keyset paging, split-screen auth, ⌘K palette, lazy routes | done 2026-10-11 (checked in the browser on synthetic data; no automated visual tests) |
-| 7 | Demo hardening | after C |
+| R | Real-data readiness (ADR 0010): client-demo runbook, delete-org with receipts, reconnect detection, mapping suggestions, Gmail search-not-list reader, "customer = has a deal" | done 2026-10-11 (ONEWHO rehearsal run live, see §11e) |
+| P | Renewal patterns (ADR 0011): finished renewal cycles → per-company nearest-neighbour library → every client's path compared; module page `/patterns` | done 2026-10-12 (simulated on Lumora: no clear difference vs rules at 30/60 days; no verdict beyond 60 days) |
+| 7 | Demo hardening | **next** — nothing built yet (no demo mode/pseudonyms, no `make demo-reset`) |
 | 8–10 | Pilots / paid launch / scale (production) | later |
 
 Phase 4 live proof (observed): one change set (Lattice Logistics, play `champion_departure`)
@@ -184,9 +188,11 @@ backend/casefile/
   worker/              __main__.py (APScheduler: syncs, job queue incl. plan_case, rescore 6h,
                        outcomes 1h, email purge 6h), jobs.py
   outcomes/            tracker.py (6.1 checkpoints via as-of snapshots, plays table)
+  patterns/            features.py (a moment as 9 numbers), matching.py (beyond-chance weights, path k-NN,
+                       no-look-ahead test, map projection), train.py (cycles → library → matches) — ADR 0011
   api/                 main.py + routers: auth, accounts, connections, identity, queue, insights,
                        cases, changes (inbox/plan/approve…/executor status), backtest, team (C1),
-                       mapping (C2), onboarding (C4)
+                       mapping (C2), onboarding (C4), patterns (ADR 0011)
   onboarding.py        C4: modes setup/shadow/live, derived checklist, HubSpot connect, usage upload
   secretbox.py         Fernet encryption of pasted read tokens (SECRETS_KEY)
   invites.py           one-time invite links; one email = one organisation
@@ -195,7 +201,7 @@ backend/casefile/
   cli.py               `uv run casefile <cmd>` (synth, bootstrap, create-org, init-secrets-key, sync,
                        google-auth, recompute, explain, eval, evals, backtest, derive-outcomes,
                        match-report, set-password, db-roles, reapply-mapping…)
-backend/tests/         360 tests; fake_ai.py (FakeClient), fake_writers.py, factories.py, conftest.py
+backend/tests/         377 tests; fake_ai.py (FakeClient), fake_writers.py, factories.py, conftest.py
 frontend/src/          React 19 + Vite 7 + Tailwind 4 + TanStack Query + React Router 7 + lucide-react (ADR 0009)
   index.css            design tokens (light + dark CSS variables), motion, base — never raw hex in components
   components/ui/       the design system: Button, Badge, Card/PageHeader, Field/Input/Select…, Callout/
@@ -207,7 +213,8 @@ frontend/src/          React 19 + Vite 7 + Tailwind 4 + TanStack Query + React R
   components/auth/     AuthLayout (split screen + gradient flow), PasswordStrength
   components/          charts.tsx (usage, risk timeline, bar list, range bars), domain.tsx (SignalChip,
                        EvidenceChip, HonestyLabel), PlanPanel, AssessmentPanel, RiskLevers, EvidenceDrawer, …
-  pages/               Overview (home), Queue, Approvals, Accounts, Account, Outcomes, Backtest, Replay,
+  components/patterns/ CycleCompare (finished vs open cycle, lined up on decisions; icon lanes), PathChart, PatternMap, WhatMatters, shared
+  pages/               Overview (home), Queue, Approvals, Accounts, Account, Patterns, Outcomes, Backtest, Replay,
                        Audit, Connections, BlindSpots, Identity, Setup (Onboarding), Team, Settings, auth pages
   lib/                 theme, hooks (URL state, local prefs, count-up), session (useMe), csv, cn
 docs/                  IMPLEMENTATION_PLAN.md, RESULTS.md (generated), adr/0001–0009,
@@ -226,6 +233,7 @@ make test | lint | fmt | typecheck | check          # check = what CI runs
 make executor [SHADOW=1] | executor-once | slackbot | sandbox-setup [OWNER=100856373]
 make evals [AI=1]                                    # all free suites → docs/RESULTS.md (~30 s)
 make backtest | load
+cd backend && uv run casefile train-patterns [--org SLUG]   # renewal patterns (no AI, ~10 s for 200 accounts)
 cd backend && uv run casefile --help                 # full CLI
 cd backend && uv run python -m casefile.mcp_server --user admin@lumora.test   # read-only MCP (stdio)
 cd backend && uv run python -m casefile.slackbot check|run                     # Slack approval buttons
@@ -280,8 +288,9 @@ its loop also sends the 09:00 (Asia/Kolkata) morning digest to the workspace own
 
 - Dev DB: synthetic company "Lumora" (vendor domain `lumora.test`, tz Asia/Kolkata), seed 7,
   200 accounts, 730 days, generated relative to 2026-10-11 (`data/synth/default`, `ground_truth.json`
-  holds the planted stories). Acme Corp is the blueprint's hero case. 8 open cases (6 risk, 2
-  expansion). Org slug `lumora`. Users: admin + 6 owners (Priya Sharma, Rahul Verma, …).
+  holds the planted stories). Acme Corp is the blueprint's hero case. Open cases now (observed 2026-10-11 22:00 IST):
+  10 risk + 20 expansion (was 6 + 2 before scoring v5 and the 120-day email read).
+  Org slug `lumora`. Users: admin + 6 owners (Priya Sharma, Rahul Verma, …).
 - Already executed in the sandbox: Acme (task, note, next step, DM) and Lattice Logistics (all 5).
 - Tests use their own DB (`casefile_test`) and a small synth (seed 11, 30 accounts, 400 days,
   TEST_TODAY 2026-10-10); each test's writes are rolled back (savepoint pattern in conftest).
@@ -377,6 +386,23 @@ its loop also sends the 09:00 (Asia/Kolkata) morning digest to the workspace own
   PRODUCT USAGE IS GENERATED (`casefile generate-usage`, `data/usage/onewho-product-usage.csv`, one story
   per company, see `synth/usage_stories.py`). The user chose not to label it in the app; never describe
   ONEWHO's usage-based findings as observed or real in reports.
+- ONEWHO state (observed 2026-10-11 22:00 IST): mode **live** since 13:37 UTC (setup → shadow 13:25 →
+  live, overriding the 14-day-shadow and 5-decisions recommendations; reason recorded in the audit log).
+  20 accounts, 4 open risk cases; two change sets executed live (8 lines: HubSpot task, note, next step
+  in portal 247660225 + its Slack DM), 4 lines `would_execute` from the shadow period, 4 proposed.
+- Other self-service orgs on the Mac (all setup mode, the user's own sign-ups): `acme`, `sachin-brand`
+  (HubSpot/Gmail/Calendar read connections never synced; HubSpot/Slack write connections exist).
+
+## 11f. Renewal patterns (since 2026-10-12, ADR 0011)
+
+- `/patterns` page; `casefile train-patterns`; worker job `train_patterns` (after usage/CRM syncs with new records,
+  2-minute delay) and a daily retrain. No AI, runs in setup mode. States: no_history / learning / ready.
+- The user wants this page clean: visuals with minimal labels, no explanatory paragraphs or captions (2026-10-12).
+- It is evidence beside the rules, never a queue ranking. On Lumora (simulated) it is no better than the rules and
+  gives verdicts only 30–60 days out; say so whenever it is shown.
+- Dev review logins created 2026-10-12 for browser checks: `ui.review@lumora.test` and `ui.review@northwind.test`
+  (admins, generated password in that session's scratchpad only). Delete them when no longer needed.
+- `.claude/launch.json` on the Mac also has `api-no-ai` (the API with `AI_ENABLED=false`).
 
 ## 12. Gotchas learned the hard way
 
@@ -405,6 +431,8 @@ its loop also sends the 09:00 (Asia/Kolkata) morning digest to the workspace own
   trigger also fired on cascades that delete zero rows.
 - Changing `.env` needs an API/worker restart (settings are cached); a sign-up made before the restart
   goes to `data/outbox` even with Brevo configured.
+- An SVG/CSS entrance animation that animates `opacity` (fade-in, pop) ends at opacity 1 and overrides an
+  `opacity-*` class on the same element: put the animation on a wrapping `<g>` or use a colour with alpha.
 - HubSpot scope check without writing: POST an empty batch (`{"inputs": []}`) → 200/201 allowed, 403 not.
   403 bodies list `requiredGranularScopes` (any-of).
 

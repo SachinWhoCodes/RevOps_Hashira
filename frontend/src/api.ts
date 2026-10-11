@@ -683,3 +683,120 @@ export type ConnectOverview = {
   synthetic: ConnView[];
   slack_manifest: Record<string, unknown>;
 };
+
+// ---------------------------------------------------------------- renewal patterns
+
+export type PatternVerdict = "lost_like" | "mixed" | "renewed_like";
+export type PatternUnit = "score" | "pct" | "share" | "days" | "count" | "flag";
+export type PatternFeatures = Record<string, number | null>;
+export type PatternFeature = { key: string; label: string; unit: PatternUnit; group: string };
+export type PatternStage = {
+  stage: number;
+  n: number;
+  lost: number;
+  base_rate: number | null;
+  ready: boolean;
+  separation: number;
+  top: { feature: string; label: string; weight: number }[];
+  weights: Record<string, number>;
+  means: { kept?: PatternFeatures; lost?: PatternFeatures };
+};
+export type PatternEvalStage = { n: number; lost: number; matching_auc: Metric; rules_auc: Metric; difference: Metric; finding: string };
+export type PatternsOverview = {
+  model: null | {
+    id: string;
+    version: number;
+    status: "no_history" | "learning" | "ready" | "failed";
+    label: string;
+    engine_version: string;
+    trained_at: string;
+    k: number;
+    path_steps: number;
+  };
+  can_train: boolean;
+  stats?: {
+    outcomes: Record<string, number>;
+    finished_cycles: number;
+    described_cycles: number;
+    undescribed?: Record<string, number>;
+    lost_cycles: number;
+    kept_cycles: number;
+    patterns: number;
+    clients: number;
+    matched_clients: number;
+    data_start: string | null;
+    seconds: number;
+  };
+  readiness?: { cycles: number; lost: number; min_cycles: number; min_lost: number };
+  stages?: PatternStage[];
+  evaluation?: { split: string | null; stages: Record<string, PatternEvalStage> };
+  features?: PatternFeature[];
+  excluded_signals?: string[];
+  label_coverage?: number;
+  verdicts?: Record<string, number>;
+};
+export type PatternClientRow = {
+  account_id: string;
+  name: string;
+  owner: string | null;
+  arr: number | null;
+  renewal_date: string | null;
+  days_to_renewal: number | null;
+  stage: number | null;
+  verdict: PatternVerdict | null;
+  lost: number | null;
+  k: number | null;
+  neighbours: boolean[];
+  risk_now: number | null;
+  note: string | null;
+};
+export type PatternPoint = { days: number; at: string; f: PatternFeatures };
+export type PatternCycle = {
+  id: string;
+  account_id: string;
+  name: string;
+  cycle_start: string | null;
+  cycle_end: string;
+  outcome: string;
+  lost: boolean;
+  arr_before: number | null;
+  arr_after: number | null;
+  points: PatternPoint[];
+};
+export type PatternNeighbour = { cycle_id: string; distance: number; closer_than: number; lost: boolean; cycle: PatternCycle };
+export type PatternDifference = { feature: string; label: string; unit: PatternUnit; weight: number; client: number | null; kept: number | null; lost: number | null };
+export type PatternClient = {
+  account_id: string;
+  name: string;
+  owner: string | null;
+  arr: number | null;
+  renewal_date: string | null;
+  days_to_renewal: number | null;
+  stage: number | null;
+  verdict: PatternVerdict | null;
+  computed_at: string;
+  cycle_start: string | null;
+  note: string | null;
+  now: PatternPoint | null;
+  trajectory: PatternPoint[];
+  mix: null | { k: number; lost: number; kept: number; lost_share: Metric; base_rate: number | null; verdict: PatternVerdict };
+  compared: number | null;
+  differences: PatternDifference[];
+  neighbours: PatternNeighbour[];
+  stage_model: null | { stage: number; n: number; lost: number; base_rate: number | null; ready: boolean };
+  past_cycles: { renewal_date: string; outcome: string; lost: boolean }[];
+  label: string;
+};
+export type PatternMapPoint =
+  | { kind: "cycle"; id: string; account_id: string; name: string; outcome: string; lost: boolean; date: string; x: number; y: number }
+  | { kind: "client"; id: string; account_id: string; name: string; verdict: PatternVerdict | null; x: number; y: number };
+export type PatternMapView = { stage: number; ready: boolean; axes: { loadings: { feature: string; loading: number; label: string }[] }[]; points: PatternMapPoint[] };
+export type PatternStrand = {
+  account_id: string;
+  name: string;
+  today: string;
+  since: string;
+  renewal_date: string | null;
+  decisions: { date: string; outcome: string; lost: boolean }[];
+  weeks: { week: string; emails_in: number; emails_out: number; meetings: number; users: number | null }[];
+};
