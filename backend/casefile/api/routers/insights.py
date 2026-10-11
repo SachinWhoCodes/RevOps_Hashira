@@ -26,7 +26,7 @@ from casefile.db.models import (
     Org,
     UsageDaily,
 )
-from casefile.ingest.util import field_mapping
+from casefile.ingest.mapping import org_mapping
 from casefile.scoring.points import default_scoring
 from casefile.signals.base import ENGINE_VERSION, REGISTRY, default_thresholds
 
@@ -95,7 +95,7 @@ def blind_spots(db: Session = Depends(get_db), org: Org = Depends(current_org)) 
 
 
 @router.get("/config")
-def config(org: Org = Depends(current_org)) -> dict[str, Any]:
+def config(db: Session = Depends(get_db), org: Org = Depends(current_org)) -> dict[str, Any]:
     return {
         "engine_version": ENGINE_VERSION,
         "signals": [
@@ -104,7 +104,7 @@ def config(org: Org = Depends(current_org)) -> dict[str, Any]:
         ],
         "thresholds": default_thresholds(),
         "scoring": default_scoring(),
-        "field_mapping": field_mapping(),
+        "field_mapping": org_mapping(db, org.id),
         "editable": False,
     }
 

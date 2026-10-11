@@ -61,7 +61,7 @@ def client(synced: Session) -> Iterator[TestClient]:
 
 @pytest.fixture(autouse=True)
 def no_live_crm(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(changes, "_live", lambda: None)
+    monkeypatch.setattr(changes, "_live", lambda db, org_id: None)
     monkeypatch.setattr(changes, "AiGateway", lambda db, org_id: None)  # template drafts, no AI
 
 

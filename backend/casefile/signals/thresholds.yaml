@@ -1,6 +1,6 @@
 # Signal thresholds — STARTING HYPOTHESES from the blueprint, to be tuned by the Phase 5 back-test.
 # Changing a value changes engine behaviour: bump `version` so assessments record which rules ran.
-version: 4
+version: 5
 
 meeting_gap:
   min_days: 21              # days since the last held customer meeting
@@ -52,3 +52,8 @@ upgrade_interest:         # v3
 single_threaded:          # v4: only one person at the customer emailed or met us recently
   lookback_days: 60
   max_active_people: 1
+
+champion_fallback:        # v5: CRMs that never record buying roles still get champion signals
+  enabled: true
+  lookback_days: 90       # the customer contact who wrote to us or met us most in this window...
+  min_interactions: 3     # ...at least this often, becomes the "likely champion" (labelled inferred)

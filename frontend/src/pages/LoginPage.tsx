@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, type User } from "../api";
 import { ErrorNote } from "../components/ui";
 
@@ -13,7 +13,7 @@ export default function LoginPage() {
     mutationFn: () => api<User>("/auth/login", { json: { email, password } }),
     onSuccess: (user) => {
       qc.setQueryData(["me"], user);
-      navigate("/queue");
+      navigate("/");
     },
   });
   const submit = (e: FormEvent) => {
@@ -41,6 +41,10 @@ export default function LoginPage() {
         <button disabled={login.isPending} className="w-full rounded-md bg-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
           {login.isPending ? "Signing in…" : "Sign in"}
         </button>
+        <div className="flex justify-between text-sm">
+          <Link to="/forgot" className="text-accent hover:underline">Forgot password?</Link>
+          <Link to="/register" className="text-accent hover:underline">Create an account</Link>
+        </div>
       </form>
     </div>
   );

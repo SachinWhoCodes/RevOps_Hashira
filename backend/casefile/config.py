@@ -30,12 +30,36 @@ class Settings(BaseSettings):
     google_client_secret: SecretStr | None = None
     read_google_refresh_token: SecretStr | None = None
     read_usage_dsn: SecretStr | None = None
+    # Encrypts credentials pasted into the app during onboarding (Fernet key; `casefile init-secrets-key`).
+    # Read-zone tokens only: write credentials still live only in the executor's own env file (R1).
+    secrets_key: SecretStr | None = None
+    # Files uploaded during onboarding (usage CSVs). The API and worker must share this directory.
+    upload_dir: Path = REPO_ROOT / "data" / "uploads"
+    # Public half of the executor's sealing key (X25519, base64): the app can seal write credentials
+    # pasted by admins but never open them. The private half lives only in .env.executor.
+    executor_seal_public_key: str | None = None
+    # Google sign-in for "Connect Google" (web flow). Default: <APP_BASE_URL>/api/oauth/google/callback.
+    google_redirect_uri: str | None = None
+
+    # Transactional email (sign-up confirmation, password reset, invites) through Brevo. Without a key,
+    # a local (localhost) deployment writes emails to data/outbox instead of sending them.
+    brevo_api_key: SecretStr | None = None
+    mail_from_email: str | None = None
+    mail_from_name: str = "Casefile"
+    outbox_dir: Path = REPO_ROOT / "data" / "outbox"
+    # Self-service registration limits.
+    signup_enabled: bool = True
+    signups_per_email_per_hour: int = 3
+    signups_per_ip_per_hour: int = 20
 
     anthropic_api_key: SecretStr | None = None
     # Kill switch: false = deterministic template explanations only, no AI calls at all.
     ai_enabled: bool = True
-    # Hard stop on AI spend per organisation per UTC day (cost control, plan section 8).
+    # Hard stop on AI spend per organisation per UTC day (cost control, plan section 8). An operator
+    # can set a different cap for one organisation (`casefile set-ai-cap`).
     ai_daily_budget_usd: float = 10.0
+    # Backstop across all organisations together (self-service sign-up means strangers use our key).
+    ai_platform_daily_budget_usd: float = 25.0
 
     # Phase 4: propose a change set as soon as an open case has a written explanation.
     auto_plan_cases: bool = True

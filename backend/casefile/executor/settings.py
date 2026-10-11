@@ -30,6 +30,9 @@ class ExecutorSettings(BaseSettings):
     google_client_secret: SecretStr | None = None
     write_google_refresh_token: SecretStr | None = None
     slack_bot_token: SecretStr | None = None
+    # Opens write credentials that admins pasted into the app (sealed with the public half, which the app
+    # holds as EXECUTOR_SEAL_PUBLIC_KEY). Only this process has it (`casefile init-executor-keys`).
+    executor_seal_private_key: SecretStr | None = None
 
     # Shadow mode: run every check and record "would_execute", but write nothing.
     executor_shadow_mode: bool = False

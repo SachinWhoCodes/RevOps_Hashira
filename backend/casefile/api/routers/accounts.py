@@ -35,6 +35,7 @@ from casefile.db.models import (
     UsageDaily,
 )
 from casefile.outcomes.tracker import account_outcomes
+from casefile.signals.base import apply_role_fallbacks
 from casefile.timeline.snapshot import AccountHistory, Snapshot
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
@@ -298,7 +299,7 @@ def account_timeline(
             "seats_purchased": snap.account.seats_purchased,
         },
         "sources": sorted(snap.sources),
-        "relationships": relationship_map(snap),
+        "relationships": relationship_map(apply_role_fallbacks(snap)),
         "contacts": [
             {
                 "id": str(c.id),

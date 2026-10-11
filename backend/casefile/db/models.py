@@ -296,10 +296,50 @@ class AppUser(Base):
     crm_owner_id: Mapped[str | None] = mapped_column(String(64), index=True)
     # Owners discovered from the CRM exist as rows but cannot log in until a password is set.
     is_active: Mapped[bool] = mapped_column(default=False)
+    last_login_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = _created()
 
 
 # ---------------------------------------------------------------- connections and raw data
+
+
+class Signup(Base):
+    """A self-service registration waiting for its email to be confirmed. No organisation exists until
+    the link is used, so an unconfirmed sign-up can never block the real owner of an email address.
+    Not a tenant table (there is no tenant yet); only a hash of the token is stored."""
+
+    __tablename__ = "signup"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    company: Mapped[str] = mapped_column(String(200))
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    password_hash: Mapped[str] = mapped_column(Text)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    ip_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    expires_at: Mapped[datetime]
+    verified_at: Mapped[datetime | None]
+    superseded_at: Mapped[datetime | None]
+    org_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("org.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = _created()
+
+
+class UserInvite(Base):
+    """A one-time link that lets a person set their password. Only a hash of the token is stored;
+    the link itself is shown once to the admin who created it."""
+
+    __tablename__ = "user_invite"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = _org_fk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("app_user.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime]
+    used_at: Mapped[datetime | None]
+    revoked_at: Mapped[datetime | None]
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = _created()
 
 
 class Connection(Base):
@@ -312,9 +352,14 @@ class Connection(Base):
     zone: Mapped[Zone] = mapped_column(_enum(Zone), default=Zone.read)
     name: Mapped[str] = mapped_column(String(100), default="default")
     status: Mapped[ConnectionStatus] = mapped_column(_enum(ConnectionStatus), default=ConnectionStatus.active)
-    # Non-secret settings only. Secrets are referenced by env-var name in ``secret_ref``.
+    # Non-secret settings only. A secret is either referenced by env-var name in ``secret_ref`` (set by
+    # the operator) or pasted by an admin and stored encrypted in ``secret_enc`` (casefile.secretbox).
     config: Mapped[dict[str, Any]] = mapped_column(default=dict)
     secret_ref: Mapped[str | None] = mapped_column(String(100))
+    secret_enc: Mapped[str | None] = mapped_column(Text)
+    # A write credential pasted by an admin, sealed with the executor's public key: the app can store it
+    # but never read it back; only the executor process holds the private key (rule R1).
+    secret_sealed: Mapped[str | None] = mapped_column(Text)
     cursor: Mapped[dict[str, Any]] = mapped_column(default=dict)
     interval_minutes: Mapped[int] = mapped_column(default=15)
     last_sync_started_at: Mapped[datetime | None]

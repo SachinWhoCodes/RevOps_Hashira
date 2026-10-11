@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from casefile.db.models import AppUser, Org, UserRole
 from casefile.db.session import get_sessionmaker
+from casefile.db.tenant import set_tenant, system_scope
 
 CSRF_HEADER = "x-casefile-csrf"
 
@@ -24,8 +25,18 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> AppUser:
     raw = request.session.get("uid")
     if not raw:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not signed in")
-    user = db.get(AppUser, uuid.UUID(raw))
-    if user is None or not user.is_active:
+    org = request.session.get("org")
+    if org:
+        set_tenant(db, org)  # row-level security: this request sees only the signed-in organisation
+        user = db.get(AppUser, uuid.UUID(raw))
+    else:  # a session from before organisations were stored in the cookie: look the user up once
+        system_scope(db)
+        user = db.get(AppUser, uuid.UUID(raw))
+        system_scope(db, False)
+        if user is not None:
+            set_tenant(db, user.org_id)
+            request.session["org"] = str(user.org_id)
+    if user is None or not user.is_active or str(user.org_id) != (org or str(user.org_id)):
         request.session.clear()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not signed in")
     return user

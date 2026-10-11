@@ -10,10 +10,14 @@ from casefile.api.routers import (
     backtest,
     cases,
     changes,
+    connect,
     connections,
     identity,
     insights,
+    mapping,
+    onboarding,
     queue,
+    team,
 )
 from casefile.config import get_settings
 
@@ -29,7 +33,21 @@ app.add_middleware(
     max_age=7 * 24 * 3600,
 )
 
-for module in (auth, accounts, connections, identity, queue, insights, cases, changes, backtest):
+for module in (
+    auth,
+    accounts,
+    connections,
+    identity,
+    queue,
+    insights,
+    cases,
+    changes,
+    backtest,
+    team,
+    mapping,
+    onboarding,
+    connect,
+):
     app.include_router(module.router, prefix="/api")
 
 

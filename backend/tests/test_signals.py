@@ -389,3 +389,50 @@ def test_every_fact_is_json_ready_and_every_hit_has_evidence() -> None:
         json.dumps(h.to_dict())
         assert h.evidence, h.type
         assert h.summary.endswith(".")
+
+
+# ---------------------------------------------------------------- champion fallback (v5)
+
+
+def test_a_crm_without_champions_gets_a_likely_champion() -> None:
+    from casefile.signals.base import apply_role_fallbacks, run_signals
+
+    people = [
+        contact(DANA, "user", name="Dana"),
+        contact("amara@acme.test", "user", name="Amara"),
+        contact("cfo@acme.test", "economic_buyer", name="Cfo"),
+    ]
+    acts = [
+        email_in(at(60), DANA, thread="a"),
+        email_in(at(50), DANA, thread="b"),
+        meeting(at(40), [DANA, "cfo@acme.test"]),
+        meeting(at(45), ["cfo@acme.test"]),
+        meeting(at(44), ["cfo@acme.test"]),
+        meeting(at(43), ["cfo@acme.test"]),
+        email_in(at(30), "amara@acme.test"),
+        email_out(at(20), DANA, thread="c"),
+        email_out(at(12), DANA, thread="d"),
+    ]
+    snap = snapshot(activities=acts, contacts=people)
+    inferred = apply_role_fallbacks(snap)
+    champ = next(c for c in inferred.contacts if c.role == "champion")
+    assert champ.email == DANA and champ.role_inferred  # most engaged; the buyer keeps their role
+    (silence,) = [h for h in run_signals(snap) if h.type == "champion_silence"]
+    assert silence.facts["champion_inferred"] is True and "likely champion" in silence.summary
+
+
+def test_no_inference_when_the_crm_records_a_champion_or_engagement_is_thin() -> None:
+    from casefile.signals.base import apply_role_fallbacks
+
+    recorded = snapshot(
+        activities=[email_in(at(10), DANA)] * 3, contacts=[*_champ(), contact("x@acme.test", "user")]
+    )
+    assert apply_role_fallbacks(recorded) is recorded
+    thin = snapshot(
+        activities=[email_in(at(10), DANA), meeting(at(5), [DANA])], contacts=[contact(DANA, "user")]
+    )
+    assert all(c.role != "champion" for c in apply_role_fallbacks(thin).contacts)  # 2 < 3 interactions
+    future = snapshot(
+        activities=[meeting(at(-3), [DANA])] * 3 + [email_in(at(5), DANA)], contacts=[contact(DANA, "user")]
+    )
+    assert all(c.role != "champion" for c in apply_role_fallbacks(future).contacts)  # booked ≠ held

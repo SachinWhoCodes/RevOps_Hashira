@@ -39,6 +39,7 @@ from casefile.db.models import (
     ChangeSet,
     Org,
 )
+from casefile.db.tenant import set_tenant, system_scope
 from casefile.outcomes.tracker import account_outcomes
 from casefile.timeline.snapshot import AccountHistory
 
@@ -66,9 +67,12 @@ def create_server(
     def db() -> Iterator[tuple[Session, AppUser, Org]]:
         session = session_factory()
         try:
+            system_scope(session)  # find the bound user, then see only their organisation
             user = session.scalar(select(AppUser).where(AppUser.email == user_email.lower()))
+            system_scope(session, False)
             if user is None or not user.is_active:
                 raise BindingError(f"no active Casefile user {user_email!r}")
+            set_tenant(session, user.org_id)
             org = session.get(Org, user.org_id)
             assert org is not None
             yield session, user, org

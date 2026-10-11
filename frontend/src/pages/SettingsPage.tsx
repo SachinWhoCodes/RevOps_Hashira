@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
+import { useMe } from "../App";
 import { api, type AiUsage } from "../api";
+import FieldMappingEditor from "../components/FieldMappingEditor";
 import { Badge, ErrorNote, Loading, PageHeader, Panel } from "../components/ui";
 import { polarityTone } from "../signals";
 
@@ -18,10 +20,11 @@ const Yaml = ({ value }: { value: unknown }) => (
 export default function SettingsPage() {
   const cfg = useQuery({ queryKey: ["config"], queryFn: () => api<Config>("/config") });
   const usage = useQuery({ queryKey: ["ai-usage"], queryFn: () => api<AiUsage>("/ai/usage") });
+  const me = useMe();
   const c = cfg.data;
   return (
     <>
-      <PageHeader title="Settings" subtitle="Read-only for now. Rules and points are starting values from the blueprint; the back-test tunes them." />
+      <PageHeader title="Settings" subtitle="Rules and points are starting values from the blueprint (the back-test tunes them). Admins can edit the CRM field mapping." />
       {cfg.isLoading && <Loading />}
       {cfg.error && <ErrorNote error={cfg.error} />}
       {c && (
@@ -65,7 +68,7 @@ export default function SettingsPage() {
             <Panel title="Signal thresholds"><Yaml value={c.thresholds} /></Panel>
             <Panel title="Scoring"><Yaml value={c.scoring} /></Panel>
           </div>
-          <Panel title="CRM field mapping"><Yaml value={c.field_mapping} /></Panel>
+          {me.data?.role === "admin" ? <FieldMappingEditor /> : <Panel title="CRM field mapping"><Yaml value={c.field_mapping} /></Panel>}
         </div>
       )}
     </>

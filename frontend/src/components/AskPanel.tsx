@@ -51,10 +51,13 @@ export default function AskPanel({ accountId }: { accountId: string }) {
             {ask.isPending ? "Looking it up…" : "Ask"}
           </button>
         </form>
+        <p className="-mt-1 text-[11px] text-faint">
+          Each new question is one paid AI call (about $0.03); asking the same question again about an unchanged account is free.
+        </p>
         {!a && !ask.isPending && (
           <div className="flex flex-wrap gap-1.5">
             {EXAMPLES.map((q) => (
-              <button key={q} onClick={() => { setQuestion(q); submit(q); }}
+              <button key={q} onClick={() => setQuestion(q)} title="Fills the box; nothing is sent until you press Ask"
                 className="rounded-full border border-line px-2 py-0.5 text-xs text-muted hover:border-accent hover:text-accent">
                 {q}
               </button>

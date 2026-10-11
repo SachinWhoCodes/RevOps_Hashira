@@ -46,7 +46,6 @@ from casefile.db.models import (
     Org,
     UsageDaily,
 )
-from casefile.ingest.util import field_mapping
 
 UNRESOLVED = {MatchMethod.unmatched, MatchMethod.ambiguous, MatchMethod.internal_only}
 
@@ -121,6 +120,7 @@ class ContactView:
     status: str
     origin: str
     status_since: datetime | None = None  # when the current status was recorded
+    role_inferred: bool = False  # role guessed from engagement, not recorded in the CRM (signals v5)
 
 
 @dataclass(frozen=True)
@@ -291,7 +291,9 @@ class AccountHistory:
         org = session.get(Org, account.org_id)
         assert org is not None
         h.tz = ZoneInfo(org.timezone)
-        dmap = field_mapping()["hubspot"]["deal"]
+        from casefile.ingest.mapping import org_mapping
+
+        dmap = org_mapping(session, account.org_id)["hubspot"]["deal"]
         h.won, h.lost = set(dmap["won_stages"]), set(dmap["lost_stages"])
         h.contacts = list(session.scalars(select(Contact).where(Contact.account_id == account_id)))
         h.deals = list(session.scalars(select(Deal).where(Deal.account_id == account_id)))

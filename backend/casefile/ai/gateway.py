@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 from casefile.ai.masking import mask
 from casefile.ai.pricing import cost_usd
 from casefile.config import get_settings
-from casefile.db.models import LlmCache, LlmCall
+from casefile.db.models import LlmCache, LlmCall, Org
 
 log = structlog.get_logger()
 
@@ -91,6 +91,21 @@ def cache_key(
     return hashlib.sha256(material.encode()).hexdigest()
 
 
+def platform_spent_today(session: Session) -> float:
+    """AI spend today across all organisations (one explicit row-level-security bypass)."""
+    from casefile.db.tenant import system_scope
+
+    start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    system_scope(session)
+    try:
+        total = session.scalar(
+            select(func.coalesce(func.sum(LlmCall.cost_usd), 0)).where(LlmCall.created_at >= start)
+        )
+    finally:
+        system_scope(session, False)
+    return float(total or 0)
+
+
 class AiGateway:
     def __init__(self, session: Session, org_id: uuid.UUID, client: Any | None = None) -> None:
         self.session = session
@@ -114,6 +129,18 @@ class AiGateway:
         if self._client is None and not self.settings.anthropic_api_key:
             return False, "no_api_key"
         return True, None
+
+    def daily_cap(self) -> float:
+        """This organisation's cap if an operator set one (`casefile set-ai-cap`), else the default."""
+        org = self.session.get(Org, self.org_id)
+        value = (org.settings or {}).get("ai_daily_budget_usd") if org is not None else None
+        return float(value) if value is not None else self.settings.ai_daily_budget_usd
+
+    def over_budget(self) -> bool:
+        if self.spent_today() >= self.daily_cap():
+            return True
+        # Backstop across every organisation (self-service sign-up means strangers spend our key).
+        return platform_spent_today(self.session) >= self.settings.ai_platform_daily_budget_usd
 
     def spent_today(self) -> float:
         start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -157,8 +184,8 @@ class AiGateway:
                 prompt_version=prompt_version,
                 cached=True,
             )
-        if self.spent_today() >= self.settings.ai_daily_budget_usd:
-            log.warning("ai_budget_exceeded", purpose=purpose, budget=self.settings.ai_daily_budget_usd)
+        if self.over_budget():
+            log.warning("ai_budget_exceeded", purpose=purpose, budget=self.daily_cap())
             return AiResult(None, False, "budget_exceeded", prompt_version=prompt_version)
 
         params: dict[str, Any] = {
@@ -286,7 +313,7 @@ class AiGateway:
         ok, why = self.available()
         if not ok:
             return None, {cid: AiResult(None, False, why) for cid, _ in items}, {}
-        if self.spent_today() >= self.settings.ai_daily_budget_usd:
+        if self.over_budget():
             return None, {cid: AiResult(None, False, "budget_exceeded") for cid, _ in items}, {}
         ready: dict[str, AiResult[T]] = {}
         keys: dict[str, str] = {}

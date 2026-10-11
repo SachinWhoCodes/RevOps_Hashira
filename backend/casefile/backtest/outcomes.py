@@ -33,7 +33,6 @@ from casefile.db.models import (
     RenewalOutcome,
     RenewalOutcomeKind,
 )
-from casefile.ingest.util import field_mapping
 
 LATE_GRACE_DAYS = 14
 # Revenue was lost: these count as positives when we ask "did Casefile see it coming?"
@@ -79,7 +78,9 @@ def classify(
 
 
 def derive_outcomes(session: Session, org: Org, *, today: date | None = None) -> DeriveReport:
-    mapping = field_mapping()["hubspot"]["deal"]
+    from casefile.ingest.mapping import org_mapping
+
+    mapping = org_mapping(session, org.id)["hubspot"]["deal"]
     won_stages, lost_stages = set(mapping["won_stages"]), set(mapping["lost_stages"])
     deals = list(session.scalars(select(Deal).where(Deal.org_id == org.id, Deal.account_id.is_not(None))))
     history: dict[uuid.UUID, dict[str, list[tuple[datetime, Any]]]] = defaultdict(lambda: defaultdict(list))

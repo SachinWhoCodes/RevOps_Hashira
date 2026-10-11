@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import socket
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -30,7 +31,7 @@ from sqlalchemy.orm import Session
 from casefile.actions.approvals import latest_approval, rollup
 from casefile.actions.spec import SPECS, approval_hash, marker
 from casefile.audit import log as audit_log
-from casefile.db.models import ChangeItem, ChangeItemStatus, ChangeSet, Decision, ExecutionAttempt
+from casefile.db.models import ChangeItem, ChangeItemStatus, ChangeSet, Decision, ExecutionAttempt, Org
 from casefile.executor.writers.base import (
     CannotVerify,
     ItemView,
@@ -68,12 +69,16 @@ class Executor:
         session: Session,
         writers: Mapping[str, Writer],
         *,
+        org_id: uuid.UUID,
         shadow: bool = False,
         worker_id: str | None = None,
         after_write: Callable[[ChangeItem, WriteResult], None] | None = None,
     ) -> None:
         self.session = session
         self.writers = writers
+        # Writers hold one organisation's credentials, so an executor only ever touches that
+        # organisation's lines (another company's approved line must never meet these tokens).
+        self.org_id = org_id
         self.shadow = shadow
         self.worker_id = worker_id or f"executor:{socket.gethostname()}:{os.getpid()}"
         # Test hook: runs after the external call and before the final commit (crash simulation).
@@ -136,13 +141,39 @@ class Executor:
         self.session.commit()
         return Outcome(str(item.id), "succeeded", {"external_id": result.external_id, **extra})
 
+    def _shadow_now(self) -> bool:
+        """Shadow when the process says so or the organisation is not live (read fresh for every line,
+        so an admin's "back to shadow" takes effect from the next line)."""
+        if self.shadow:
+            return True
+        from casefile.onboarding import org_mode
+
+        org = self.session.get(Org, self.org_id, populate_existing=True)
+        return org is None or org_mode(org) != "live"
+
+    def _would_execute(
+        self, item: ChangeItem, approval: Any, expected: str, *, checked_live: bool
+    ) -> Outcome:
+        self._finish(
+            item, S.would_execute, {"shadow": True, "payload_hash": expected, "checked_live": checked_live}
+        )
+        self._audit(
+            item,
+            "execution_shadowed",
+            payload_hash=expected,
+            checked_live=checked_live,
+            approval_id=approval.id,
+        )
+        self.session.commit()
+        return Outcome(str(item.id), "would_execute")
+
     # ---------------------------------------------------------------- main loop
 
     def run_once(self, limit: int = 20) -> list[Outcome]:
         ids = list(
             self.session.scalars(
                 select(ChangeItem.id)
-                .where(ChangeItem.status == S.queued)
+                .where(ChangeItem.status == S.queued, ChangeItem.org_id == self.org_id)
                 .order_by(ChangeItem.created_at, ChangeItem.seq)
                 .limit(limit)
             )
@@ -158,7 +189,7 @@ class Executor:
     def process(self, item_id: Any) -> Outcome | None:
         item = self.session.scalar(
             select(ChangeItem)
-            .where(ChangeItem.id == item_id, ChangeItem.status == S.queued)
+            .where(ChangeItem.id == item_id, ChangeItem.status == S.queued, ChangeItem.org_id == self.org_id)
             .with_for_update(skip_locked=True)
         )
         if item is None:
@@ -185,6 +216,10 @@ class Executor:
             self.session.commit()
             return Outcome(str(item.id), "duplicate_suppressed")
         writer = self.writers.get(item.target_system)
+        shadow = self._shadow_now()
+        if writer is None and shadow:
+            # Shadow mode before any write access exists: record what would happen; nothing is checked live.
+            return self._would_execute(item, approval, expected, checked_live=False)
         if writer is None:
             self._finish(
                 item, S.failed, {"error": f"no writer configured for {item.target_system}", "retryable": True}
@@ -229,11 +264,8 @@ class Executor:
             self.session.rollback()
             log.warning("precheck_deferred", item=str(item_id), error=str(exc))
             return Outcome(str(item_id), "deferred", {"error": str(exc)})
-        if self.shadow:
-            self._finish(item, S.would_execute, {"shadow": True, "payload_hash": expected})
-            self._audit(item, "execution_shadowed", payload_hash=expected, approval_id=approval.id)
-            self.session.commit()
-            return Outcome(str(item.id), "would_execute")
+        if shadow:
+            return self._would_execute(item, approval, expected, checked_live=True)
 
         attempt = ExecutionAttempt(
             org_id=item.org_id, change_item_id=item.id, attempt_no=len(attempts) + 1, status="started"
@@ -304,7 +336,11 @@ class Executor:
         stuck = list(
             self.session.scalars(
                 select(ChangeItem)
-                .where(ChangeItem.status == S.executing, ChangeItem.updated_at <= cutoff)
+                .where(
+                    ChangeItem.status == S.executing,
+                    ChangeItem.updated_at <= cutoff,
+                    ChangeItem.org_id == self.org_id,
+                )
                 .with_for_update(skip_locked=True)
             )
         )

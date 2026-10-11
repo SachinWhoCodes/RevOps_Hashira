@@ -30,9 +30,34 @@ export async function api<T>(path: string, options: { method?: string; json?: un
   return res.json() as Promise<T>;
 }
 
+// Multipart upload (a file field named "file"), with the same CSRF header and error handling.
+export async function apiUpload<T>(path: string, file: File): Promise<T> {
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch(`/api${path}`, { method: "POST", credentials: "same-origin", headers: { "x-casefile-csrf": "1" }, body });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      detail = (await res.json()).detail ?? detail;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(res.status, String(detail));
+  }
+  return res.json() as Promise<T>;
+}
+
 // ---------------------------------------------------------------- types
 
-export type User = { id: string; email: string; name: string; role: "owner" | "admin" | "leader" };
+export type OrgMode = "setup" | "shadow" | "live";
+export type User = {
+  id: string;
+  email: string;
+  name: string;
+  role: "owner" | "admin" | "leader";
+  org_name: string;
+  org_mode: OrgMode;
+};
 
 export type AccountRow = {
   id: string;
@@ -543,4 +568,116 @@ export type QaAnswer = {
   cached: boolean;
   model: string | null;
   prompt_version: string | null;
+};
+
+// Team (C1): who can log in. Invite links are shown once and expire after 72 hours.
+export type TeamMember = {
+  id: string;
+  email: string;
+  name: string;
+  role: "owner" | "admin" | "leader";
+  status: "active" | "invited" | "no_login";
+  crm_owner_id: string | null;
+  slack_linked: boolean;
+  last_login_at: string | null;
+  invite_expires_at: string | null;
+};
+
+// Onboarding (C4): the admin's checklist. Step states are derived from the data on every request.
+export type StepState = "done" | "warn" | "todo" | "optional" | "active";
+export type OnboardingConnection = {
+  id: string;
+  kind: string;
+  name: string;
+  status: string;
+  config: Record<string, unknown>;
+  last_success_at: string | null;
+  last_error: string | null;
+  last_run: { status: string; started_at: string; finished_at: string | null; fetched: number } | null;
+};
+export type LiveCheck = { key: string; required: boolean; ok: boolean; text: string };
+export type ShadowStats = {
+  started_at: string;
+  ended_at: string | null;
+  days: number;
+  cases_opened: number;
+  change_sets: number;
+  lines_decided: number;
+  lines_rejected: number;
+  would_execute: number;
+};
+export type OnboardingStatus = {
+  mode: OrgMode;
+  mode_since: string | null;
+  label: "observed" | "simulated";
+  start_shadow_blockers: string[];
+  ai_estimate: {
+    label: "estimated";
+    emails_to_read: number;
+    cases_to_explain: number;
+    usd: number;
+    daily_cap_usd: number;
+    days_at_cap: number;
+  } | null;
+  steps: (
+    | { key: "company"; state: StepState; data: { name: string; timezone: string; internal_domains: string[] } }
+    | {
+        key: "permission";
+        state: StepState;
+        data: { statements: string[]; recorded: { by_email: string; at: string; version: string } | null };
+      }
+    | { key: "crm"; state: StepState; data: { connections: OnboardingConnection[]; synthetic: boolean } }
+    | { key: "usage"; state: StepState; data: { connections: OnboardingConnection[]; skipped: boolean; usage_days: number } }
+    | { key: "data"; state: StepState; data: { counts: Record<string, number>; warnings: string[] } }
+    | {
+        key: "backtest";
+        state: StepState;
+        data: {
+          id: string;
+          finished_at: string | null;
+          label: string;
+          events: { total: number; scored: number; tuning: number; held_out: number } | null;
+          positives_30d: number;
+          auc_30d: Metric | null;
+          held_out_auc_30d: Metric | null;
+          recall_30d: Metric | null;
+          best_single_signal: string | null;
+          best_single_signal_auc: Metric | null;
+          enough_history: boolean;
+          note: string | null;
+        } | null;
+      }
+    | { key: "shadow"; state: StepState; data: ShadowStats | null }
+    | { key: "live"; state: StepState; data: { checks: LiveCheck[] } }
+  )[];
+};
+
+// Self-service connections (casefile/connect.py). Credentials go in, never come out.
+export type ConnView = {
+  id: string;
+  kind: string;
+  zone: "read" | "write";
+  name: string;
+  status: string;
+  config: Record<string, unknown>;
+  has_credential: boolean;
+  credential: "sealed for the executor" | "encrypted" | "server environment" | "none";
+  last_success_at: string | null;
+  last_error: string | null;
+  executor: { seen: boolean; ready: boolean; error?: string | null } | null;
+};
+export type ConnectOverview = {
+  server: { can_store_credentials: boolean; can_seal_for_executor: boolean; google_platform_app: boolean; google_redirect_uri: string };
+  permission_recorded: boolean;
+  hubspot: { read: ConnView[]; write: ConnView[] };
+  google: {
+    client: "own" | "platform" | "none";
+    own_client_id: string | null;
+    mailboxes: { mailbox: string; gmail?: ConnView; calendar?: ConnView }[];
+    drafts: ConnView[];
+  };
+  slack: ConnView[];
+  usage: ConnView[];
+  synthetic: ConnView[];
+  slack_manifest: Record<string, unknown>;
 };

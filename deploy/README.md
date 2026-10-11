@@ -28,17 +28,31 @@ DELETE or TRUNCATE the audit log (verified in the rehearsal: "permission denied"
      `POSTGRES_PASSWORD`, `APP_DB_PASSWORD` (URL-safe, 16+ characters — e.g. `python3 -c "import secrets; print(secrets.token_urlsafe(24))"`),
      `CASEFILE_DOMAIN=casefile.example.com`.
    - `env/app.env`: `SESSION_SECRET`, `APP_BASE_URL=https://<domain>`, `ANTHROPIC_API_KEY`,
-     `AI_DAILY_BUDGET_USD`, read tokens (`READ_HUBSPOT_TOKEN`, Google client and read refresh token).
+     `AI_DAILY_BUDGET_USD`, `SECRETS_KEY` (encrypts tokens admins paste during onboarding; generate with
+     `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and
+     keep a copy with the backups — without it stored tokens are unreadable). Server-wide read tokens
+     (`READ_HUBSPOT_TOKEN`, Google) only if you connect a company by hand instead of through onboarding.
    - `env/executor.env` (only when writes are agreed): write tokens, `EXECUTOR_SHADOW_MODE=true` first.
    - `env/slackbot.env` (optional): `SLACK_APP_TOKEN`.
    - `chmod 600 .env env/*.env`.
 3. `docker compose -f docker-compose.prod.yml up -d --build`
    (add `--profile slack` and, after the customer signs off on writes, `--profile writes`).
-4. Create the organisation and admin:
-   `docker compose -f docker-compose.prod.yml exec api casefile bootstrap --no-fixture --internal-domain <your-domain>`,
-   then give the admin a password you choose with `... exec api casefile set-password` (bootstrap's
-   generated password lands in a file inside the container, which you cannot easily read). Then
-   connect the CRM read token and run a first sync. (Not yet rehearsed: step 4 on a real server.)
+4. Self-service (ADR 0008): also set `EXECUTOR_SEAL_PUBLIC_KEY`, `BREVO_API_KEY`, `MAIL_FROM_EMAIL`
+   (a sender verified in Brevo) and, for "Connect Google", a Google OAuth **Web application** client
+   with `https://<domain>/api/oauth/google/callback` as redirect URI in `env/app.env`;
+   `EXECUTOR_SEAL_PRIVATE_KEY` in `env/executor.env`; `SECRETS_KEY` and the database URL in
+   `env/slackbot.env`. Generate the key pair with
+   `python3 -c "from casefile.sealing import new_keypair; print(*new_keypair(), sep='\n')"` inside the
+   backend image (first line private, second public) and never put the private half in app.env.
+   Companies then register at `https://<domain>/register`, confirm their email and connect their own
+   tools. To onboard one by hand instead:
+   `docker compose -f docker-compose.prod.yml exec api casefile create-org --slug acme --name "Acme"
+   --admin-email ops@acme.com --timezone Asia/Kolkata`. It prints a one-time invite link (72 hours);
+   send it to the admin. They finish in the app's **Setup** page: company details, data permission,
+   HubSpot read token (stored encrypted), usage CSV, back-test report, shadow mode, then live. The
+   company starts in setup mode: no AI spend and no writes until the admin moves it on.
+   One executor serves every company (writers are built per company from its sealed credentials).
+   (Not yet rehearsed: step 4 on a real server.)
 5. Check: `curl https://<domain>/api/health/ready` → `{"status":"ready"}`.
 
 ## Restore drill (do it once before real data arrives)

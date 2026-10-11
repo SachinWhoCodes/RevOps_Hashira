@@ -25,7 +25,14 @@ from typing import Any
 from casefile.actions.playbooks import Play, load_playbooks
 from casefile.db.models import Polarity
 from casefile.scoring.points import default_scoring, score
-from casefile.signals.base import REGISTRY, SignalHit, day_label, default_thresholds, run_signals
+from casefile.signals.base import (
+    REGISTRY,
+    SignalHit,
+    apply_role_fallbacks,
+    day_label,
+    default_thresholds,
+    run_signals,
+)
 from casefile.timeline.snapshot import ActivityView, ContactView, DealView, Snapshot, UsageDay
 
 LEVERS_VERSION = "levers-2"
@@ -409,6 +416,7 @@ def what_would_lower_risk(
     not yet read back (in the sandbox, CRM reads come from synthetic data, so it never is)."""
     thresholds = thresholds or default_thresholds()
     scoring = scoring or default_scoring()
+    snap = apply_role_fallbacks(snap, thresholds)  # same likely-champion inference as the signals
     plays, _ = load_playbooks()
     risk_now = _risk(snap, hits, scoring)
     close_below = scoring["cases"]["close_risk_below"]

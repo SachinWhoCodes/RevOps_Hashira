@@ -8,6 +8,7 @@ from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from casefile.config import get_settings
+from casefile.db import tenant  # noqa: F401  (registers the row-level-security hook)
 
 
 @lru_cache

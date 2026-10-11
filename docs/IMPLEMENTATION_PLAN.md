@@ -494,6 +494,11 @@ every case; 6.3 rendered + signal tested, evals delta reported; 6.4 20/20 script
 with verified citations (observed, $0.62); 6.6 expansion recall 89% / precision 85% on the planted
 stories (simulated).
 
+**Pilot readiness (Part C, 2026-10-11): done; see ADR 0007.** Hosting stack rehearsed locally; staff
+logins and invites; per-company field mapping with an inferred-champion fallback; Postgres row-level
+security on every tenant table; onboarding (setup → shadow → live) with encrypted read tokens, a
+per-organisation executor and no implicit credentials. Not yet: a real server, a real customer's CRM.
+
 ---
 
 ### Phase 7 — Demo hardening

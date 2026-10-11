@@ -16,10 +16,10 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from casefile.ai.gateway import AiGateway, AiResult, load_prompt
@@ -92,22 +92,31 @@ class ReadResult:
     accounts: set[uuid.UUID] = field(default_factory=set)
 
 
+def _pending_filter(org: Org, prompt_version: str, since_days: int) -> list[Any]:
+    since = datetime.now(UTC) - timedelta(days=since_days)
+    return [
+        Activity.org_id == org.id,
+        Activity.type == ActivityType.email,
+        Activity.direction == Direction.inbound,
+        Activity.account_id.is_not(None),
+        Activity.occurred_at >= since,
+        Activity.extra["auto_reply"].astext.is_distinct_from("true"),
+        Activity.extra["bounce"].astext.is_distinct_from("true"),
+        Activity.extra["ai_read"]["prompt"].astext.is_distinct_from(prompt_version),
+    ]
+
+
+def count_pending_emails(session: Session, org: Org, prompt_version: str, *, since_days: int = 120) -> int:
+    where = _pending_filter(org, prompt_version, since_days)
+    return int(session.scalar(select(func.count()).select_from(Activity).where(*where)) or 0)
+
+
 def pending_emails(
     session: Session, org: Org, prompt_version: str, *, since_days: int = 120, limit: int | None = None
 ) -> list[Activity]:
-    since = datetime.now(UTC) - timedelta(days=since_days)
     query = (
         select(Activity)
-        .where(
-            Activity.org_id == org.id,
-            Activity.type == ActivityType.email,
-            Activity.direction == Direction.inbound,
-            Activity.account_id.is_not(None),
-            Activity.occurred_at >= since,
-            Activity.extra["auto_reply"].astext.is_distinct_from("true"),
-            Activity.extra["bounce"].astext.is_distinct_from("true"),
-            Activity.extra["ai_read"]["prompt"].astext.is_distinct_from(prompt_version),
-        )
+        .where(*_pending_filter(org, prompt_version, since_days))
         .order_by(Activity.occurred_at.desc())
     )
     if limit:

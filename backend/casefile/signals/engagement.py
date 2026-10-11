@@ -114,14 +114,18 @@ def champion_silence(snap: Snapshot, cfg: dict[str, Any]) -> list[SignalHit]:
         name = champ.name or champ.email
         facts: dict[str, Any] = {
             "champion_name": name,
+            "champion_inferred": champ.role_inferred,
             "unanswered_emails": len(unanswered),
             "first_unanswered_date": first_day.isoformat(),
             "days_since_first_unanswered": span,
             "last_reply_date": snap.local_date(last_reply).isoformat() if last_reply else None,
             "days_since_last_reply": (snap.today - snap.local_date(last_reply)).days if last_reply else None,
         }
+        who = (
+            "likely champion, inferred from email and meeting traffic" if champ.role_inferred else "champion"
+        )
         summary = (
-            f"{name} (champion) has not replied to {len(unanswered)} emails sent since "
+            f"{name} ({who}) has not replied to {len(unanswered)} emails sent since "
             f"{day_label(first_day)} ({span} days)."
         )
         if last_reply:
@@ -224,11 +228,12 @@ def champion_departure(snap: Snapshot, cfg: dict[str, Any]) -> list[SignalHit]:
                 polarity=Polarity.risk,
                 value=len(found),
                 summary=(
-                    f"Champion {name} appears to have left ({'; '.join(how)}), "
-                    f"first seen {day_label(first_day)}."
+                    f"{'Likely champion (inferred)' if champ.role_inferred else 'Champion'} {name} appears "
+                    f"to have left ({'; '.join(how)}), first seen {day_label(first_day)}."
                 ),
                 facts={
                     "champion_name": name,
+                    "champion_inferred": champ.role_inferred,
                     "detected_date": first_day.isoformat(),
                     "days_since_detected": (snap.today - first_day).days,
                     "detections": len(found),

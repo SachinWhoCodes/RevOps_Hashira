@@ -28,8 +28,7 @@ from casefile.actions.planner import OPEN_SET, plan_case
 from casefile.actions.spec import SPECS
 from casefile.ai.gateway import AiGateway
 from casefile.api.deps import current_org, current_user, get_db
-from casefile.config import get_settings
-from casefile.connectors.hubspot.live import HubSpotLive
+from casefile.connectors.hubspot.live import HubSpotLive, live_crm_for
 from casefile.db.models import (
     Account,
     AccountCase,
@@ -55,9 +54,8 @@ class DecisionIn(BaseModel):
     comment: str | None = None
 
 
-def _live() -> HubSpotLive | None:
-    token = get_settings().read_hubspot_token
-    return HubSpotLive(token.get_secret_value()) if token else None
+def _live(db: Session, org_id: uuid.UUID) -> HubSpotLive | None:
+    return live_crm_for(db, org_id)
 
 
 def _portal(db: Session, org: Org) -> str | None:
@@ -246,7 +244,7 @@ def make_plan(
         raise HTTPException(404, "case not found")
     if not can_decide(user, case):
         raise HTTPException(403, "only the account owner or an admin can plan this case")
-    result = plan_case(db, case.id, gateway=AiGateway(db, org.id), live=_live(), force=force)
+    result = plan_case(db, case.id, gateway=AiGateway(db, org.id), live=_live(db, org.id), force=force)
     db.commit()
     if result.change_set is None:
         raise HTTPException(409, result.reason or "could not plan this case")
@@ -331,7 +329,7 @@ def refresh(
     org: Org = Depends(current_org),
 ) -> dict[str, Any]:
     try:
-        item = refresh_conflict(db, user, item_id, _live())
+        item = refresh_conflict(db, user, item_id, _live(db, user.org_id))
     except ApprovalError as exc:
         db.rollback()
         raise _http(exc) from exc

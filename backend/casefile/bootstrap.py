@@ -36,10 +36,26 @@ def verify_password(password_hash: str | None, password: str) -> bool:
         return False
 
 
-def ensure_org(session: Session, *, slug: str, name: str, timezone: str, internal_domains: list[str]) -> Org:
+def ensure_org(
+    session: Session,
+    *,
+    slug: str,
+    name: str,
+    timezone: str,
+    internal_domains: list[str],
+    mode: str = "setup",
+) -> Org:
+    """Create or update an organisation. A new one starts in ``mode`` (default ``setup``: no AI, no
+    writes — see casefile.onboarding); an existing one keeps its mode."""
     org = session.scalar(select(Org).where(Org.slug == slug))
     if org is None:
-        org = Org(slug=slug, name=name, timezone=timezone, internal_domains=internal_domains, settings={})
+        org = Org(
+            slug=slug,
+            name=name,
+            timezone=timezone,
+            internal_domains=internal_domains,
+            settings={"mode": mode},
+        )
         session.add(org)
     else:
         org.name, org.timezone = name, timezone

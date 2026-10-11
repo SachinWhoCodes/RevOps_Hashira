@@ -1,7 +1,9 @@
 # Casefile on one VM. Every process gets only the secrets it needs (rule R1):
 #   api, worker   -> deploy/env/app.env          (read tokens, Anthropic key, session secret)
-#   executor      -> deploy/env/app.env + executor.env (write tokens; no other process reads them)
-#   slackbot      -> deploy/env/slackbot.env     (Slack app token only)
+#   executor      -> deploy/env/app.env + executor.env (EXECUTOR_SEAL_PRIVATE_KEY and operator write tokens;
+#                    no other process reads them). One executor serves every organisation, each with
+#                    writers built from that organisation's own sealed credentials (ADR 0008).
+#   slackbot      -> deploy/env/slackbot.env     (SECRETS_KEY to open each workspace's app token)
 # App processes log in as casefile_runtime (member of casefile_app: cannot UPDATE/DELETE the audit
 # log); only the one-shot `migrate` job uses the database owner. Nothing but Caddy is published.
 # Usage and the restore drill: deploy/README.md.
@@ -9,6 +11,11 @@ name: casefile-prod
 
 x-runtime-db: &runtime-db
   DATABASE_URL: postgresql+psycopg://casefile_runtime:${APP_DB_PASSWORD:?set APP_DB_PASSWORD}@db:5432/casefile
+  UPLOAD_DIR: /uploads
+
+# Usage CSVs uploaded during onboarding: written by the api, read by the worker's sync.
+x-uploads: &uploads
+  - uploads:/uploads
 
 x-backend: &backend
   build: ../backend
@@ -50,6 +57,7 @@ services:
     command: uvicorn casefile.api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips "*"
     env_file: [env/app.env]
     environment: *runtime-db
+    volumes: *uploads
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/ready', timeout=3)"]
       interval: 15s
@@ -61,6 +69,7 @@ services:
     command: python -m casefile.worker
     env_file: [env/app.env]
     environment: *runtime-db
+    volumes: *uploads
 
   executor:
     <<: *backend
@@ -108,3 +117,4 @@ services:
 volumes:
   pgdata:
   caddy-data:
+  uploads:

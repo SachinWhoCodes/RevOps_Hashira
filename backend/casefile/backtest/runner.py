@@ -237,17 +237,13 @@ def run_backtest(session: Session, org: Org, config: BacktestConfig | None = Non
     session.add(run)
     session.flush()
 
-    data_start = min(
-        d
-        for d in (
-            session.scalar(select(func.min(UsageDaily.date)).where(UsageDaily.org_id == org.id)),
-            (
-                session.scalar(select(func.min(Activity.occurred_at)).where(Activity.org_id == org.id))
-                or datetime.max.replace(tzinfo=UTC)
-            ).date(),
-        )
-        if d is not None
-    )
+    first_activity = session.scalar(select(func.min(Activity.occurred_at)).where(Activity.org_id == org.id))
+    starts = [
+        session.scalar(select(func.min(UsageDaily.date)).where(UsageDaily.org_id == org.id)),
+        first_activity.date() if first_activity else None,
+    ]
+    # A company with no history yet (just connected) gets an empty report, not a crash.
+    data_start = min((d for d in starts if d is not None), default=datetime.now(UTC).date())
     earliest = _noon(data_start + timedelta(days=cfg.min_history_days), tz)
     scorer = Scorer(session, exclude)
     outcomes = list(
@@ -259,6 +255,17 @@ def run_backtest(session: Session, org: Org, config: BacktestConfig | None = Non
     )
     events = [Event(o, o.outcome.value in POSITIVE) for o in outcomes]
     skipped: dict[str, int] = defaultdict(int)
+    if not events:
+        run.metrics = {
+            "label": cfg.label.value,
+            "events": {"total": 0, "scored": 0, "tuning": 0, "held_out": 0},
+            "headline_ok": False,
+            "fallback": "no past renewals with a known outcome yet: nothing to test. Check that renewal "
+            "deals are mapped, then run it again.",
+        }
+        run.status, run.finished_at = "done", datetime.now(UTC)
+        session.flush()
+        return run
 
     # ---------------------------------------------------------------- horizon mode
     for ev in events:

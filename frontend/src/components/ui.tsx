@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 type Tone = "neutral" | "accent" | "risk" | "warn" | "ok";
 
@@ -50,4 +50,25 @@ export function Loading({ what = "Loading" }: { what?: string }) {
 
 export function ErrorNote({ error }: { error: unknown }) {
   return <p className="rounded-md bg-risk-soft px-3 py-2 text-sm text-risk">{error instanceof Error ? error.message : "Something went wrong"}</p>;
+}
+
+// A dialog for step-by-step guides. Esc or the backdrop closes it.
+export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}
+        className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-line bg-panel shadow-xl">
+        <header className="sticky top-0 flex items-center justify-between border-b border-line bg-panel px-4 py-3">
+          <h2 className="text-sm font-semibold">{title}</h2>
+          <button onClick={onClose} className="rounded-md px-2 text-lg leading-none text-muted hover:bg-canvas" aria-label="Close">×</button>
+        </header>
+        <div className="space-y-3 p-4 text-sm">{children}</div>
+      </div>
+    </div>
+  );
 }

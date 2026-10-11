@@ -69,7 +69,12 @@ def synced(engine: Engine, small_synth: Path) -> Iterator[Session]:
     outer = connection.begin()
     session = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
     org = ensure_org(
-        session, slug="test-org", name="Lumora", timezone="Asia/Kolkata", internal_domains=["lumora.test"]
+        session,
+        slug="test-org",
+        name="Lumora",
+        timezone="Asia/Kolkata",
+        internal_domains=["lumora.test"],
+        mode="live",  # the shared test company behaves like the live demo organisation
     )
     upsert_user(
         session, org, email="admin@lumora.test", name="Admin", role=UserRole.admin, password="test-password-1"

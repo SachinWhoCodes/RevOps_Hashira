@@ -20,24 +20,26 @@ from datetime import UTC, datetime, timedelta
 import structlog
 from apscheduler.schedulers.blocking import BlockingScheduler
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from casefile.actions.planner import plan_case
 from casefile.ai.email_reader import pending_emails, read_emails
 from casefile.ai.explain import explain_assessment
 from casefile.ai.gateway import AiGateway, load_prompt
 from casefile.cases.service import RecomputeContext, recompute_account, recompute_all
-from casefile.config import get_settings
-from casefile.connectors.hubspot.live import HubSpotLive
+from casefile.connectors.hubspot.live import HubSpotLive, live_crm_for
 from casefile.db.models import Connection, ConnectionStatus, Job, JobStatus, Org, Zone
 from casefile.db.session import get_sessionmaker
 from casefile.ingest.retention import purge_expired_bodies
 from casefile.ingest.sync_runner import run_sync
+from casefile.onboarding import org_mode
 from casefile.outcomes.tracker import track
 from casefile.worker.jobs import claim, enqueue, enqueue_recompute
 
 log = structlog.get_logger()
 WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
 READ_EMAILS_PER_JOB = 100  # keeps each job short; the job re-queues itself while emails remain
+AI_JOBS = {"read_emails", "write_explanation", "plan_case"}
 
 
 def due_connections() -> None:
@@ -57,10 +59,18 @@ def due_connections() -> None:
         session.close()
 
 
-def live_crm() -> HubSpotLive | None:
-    """Read-zone HubSpot access for the planner's "before" values (None when not configured)."""
-    token = get_settings().read_hubspot_token
-    return HubSpotLive(token.get_secret_value()) if token else None
+def live_crm(session: Session, org_id: uuid.UUID) -> HubSpotLive | None:
+    """Read-zone HubSpot access for the planner's "before" values, with this organisation's own
+    credential (None when it has none)."""
+    return live_crm_for(session, org_id)
+
+
+def held_in_setup(session: Session, job: Job) -> bool:
+    """AI jobs (paid) wait until the organisation leaves setup mode (casefile.onboarding)."""
+    if job.kind not in AI_JOBS or job.org_id is None:
+        return False
+    org = session.get(Org, job.org_id)
+    return org is not None and org_mode(org) == "setup"
 
 
 def _finish(session: object, job: Job, ok: bool, error: str | None) -> None:
@@ -73,7 +83,14 @@ def queued_jobs() -> None:
     try:
         jobs = claim(
             session,
-            ["sync_connection", "recompute_account", "read_emails", "write_explanation", "plan_case"],
+            [
+                "sync_connection",
+                "recompute_account",
+                "read_emails",
+                "write_explanation",
+                "plan_case",
+                "reapply_mapping",
+            ],
             WORKER_ID,
             limit=50,
         )
@@ -81,7 +98,10 @@ def queued_jobs() -> None:
         contexts: dict[object, RecomputeContext] = {}
         for job in jobs:
             try:
-                if job.kind == "sync_connection":
+                if held_in_setup(session, job):
+                    # Setup mode spends nothing on AI; starting shadow mode queues this work again.
+                    _finish(session, job, True, "skipped: organisation in setup mode")
+                elif job.kind == "sync_connection":
                     run = run_sync(session, job.payload["connection_id"])
                     _finish(session, job, run.status.value == "succeeded", run.error)
                 elif job.kind == "recompute_account":
@@ -106,9 +126,21 @@ def queued_jobs() -> None:
                             dedupe_key=f"read_emails:{org.id}",
                         )
                     _finish(session, job, True, json.dumps(out.failed) if out.failed else None)
+                elif job.kind == "reapply_mapping":
+                    from casefile.ingest.mapping import reapply
+
+                    uid = job.payload.get("user_id")
+                    assert job.org_id is not None
+                    reapply(session, job.org_id, uuid.UUID(uid) if uid else None)
+                    _finish(session, job, True, None)
                 elif job.kind == "plan_case":
                     gateway = AiGateway(session, job.org_id) if job.org_id else None
-                    plan_case(session, uuid.UUID(job.payload["case_id"]), gateway=gateway, live=live_crm())
+                    plan_case(
+                        session,
+                        uuid.UUID(job.payload["case_id"]),
+                        gateway=gateway,
+                        live=live_crm(session, job.org_id) if job.org_id else None,
+                    )
                     _finish(session, job, True, None)
                 else:  # write_explanation
                     gateway = AiGateway(session, job.org_id) if job.org_id else None
@@ -161,6 +193,9 @@ def purge_bodies() -> None:
 
 
 def main() -> None:
+    from casefile.db.tenant import set_process_system
+
+    set_process_system()  # the worker serves every organisation (row-level security bypass, by design)
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(
         due_connections,

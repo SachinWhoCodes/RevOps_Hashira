@@ -181,7 +181,10 @@ export default function BacktestPage() {
       {run.isLoading && <Loading />}
       {(run.error || rerun.error) && <ErrorNote error={run.error ?? rerun.error} />}
       {!run.isLoading && !r && <p className="text-sm text-muted">No back-test has been run yet.</p>}
-      {r && m && (
+      {r && m && m.events.total === 0 && (
+        <p className="rounded-md border border-warn bg-warn-soft px-3 py-2 text-sm text-warn">{m.fallback ?? "No past renewals to test yet."}</p>
+      )}
+      {r && m && m.events.total > 0 && (
         <div className="space-y-4">
           <div className="rounded-md border border-warn bg-warn-soft px-3 py-2 text-sm text-warn">
             <div className="font-medium">Read these numbers with their labels</div>

@@ -16,7 +16,7 @@ Phase 5 (everything up to here is committed and pushed to `origin/main`).
    ```
    colima start                # Docker runtime; `docker compose` plugin is NOT wired → Makefile uses docker-compose
    make up                     # Postgres 16 on port 5433 + migrations on dev and test DBs
-   make test                   # expect 288 passed in ~35 s
+   make test                   # expect 341 passed in ~90 s
    ```
 3. Dev servers: `make api` (:8000) and `make web` (:5173), or in the Claude desktop app use the
    preview launch configs `api` / `web` in `.claude/launch.json` (absolute paths on purpose; `.claude/`
@@ -62,7 +62,7 @@ Gmail (drafts only), Slack → hash-chained audit log. A "time machine" back-tes
 - **Minimise Anthropic API spend in testing**: automated tests never call the API (fake clients);
   live checks use the smallest useful sample; rely on the `llm_cache`; dev budget
   `AI_DAILY_BUDGET_USD=2`; report observed spend from `llm_call`; **ask before larger runs**.
-  Total spend to date: **$0.4994** (observed 2026-10-11, `select sum(cost_usd) from llm_call`).
+  Total spend to date: **$2.9137** (observed 2026-10-11, `select sum(cost_usd) from llm_call`).
 - **Secrets**: never print, echo, paste or commit tokens/passwords. Never edit `.env*` with shell
   `echo >>` (it once corrupted the API key line — no trailing newline). Use the CLI `_set_env`
   helper or a newline-safe Python script.
@@ -85,7 +85,9 @@ Gmail (drafts only), Slack → hash-chained audit log. A "time machine" back-tes
 | 4 | Change sets, approvals, separate executor, audit, Slack | **done, exit gate met live** — ADR 0004 |
 | 5 | Back-test + evaluation suite | **done, exit gate met** — ADR 0005, `docs/RESULTS.md` |
 | 6 | Level 2 differentiators (§14) | **done except 6.7** (needs Linear creds) — 6.1–6.6, 6.8; A1 (HubSpot emails/meetings), A2 (sandbox read-back), rules v4, email retention job done (ADR 0006) |
-| 7 | Demo hardening | after 6 |
+| C | Pilot readiness (ADR 0007): hosting, team/invites, field mapping + champion fallback, row-level security, onboarding (setup → shadow → live) | done |
+| S | Self-service (ADR 0008): sign-up + Brevo email confirmation, connections pasted in the app with guides, sealed write credentials, one executor for all orgs, per-org AI caps | done (live email + Google consent need the user) |
+| 7 | Demo hardening | after C |
 | 8–10 | Pilots / paid launch / scale (production) | later |
 
 Phase 4 live proof (observed): one change set (Lattice Logistics, play `champion_departure`)
@@ -128,7 +130,7 @@ backend/casefile/
   ingest/              normalize/*, sync_runner.py, field_mapping.yaml, util (canonical_json, payload_hash)
   identity/            resolver.py (email/domain/thread/overrides), evaluate.py
   timeline/snapshot.py AccountHistory.load(...).as_of(t) → frozen Snapshot (THE door to history)
-  signals/             base.py (registry, run_signals), engagement/crm/usage/language, thresholds.yaml v4
+  signals/             base.py (registry, run_signals, champion fallback), engagement/crm/usage/language, thresholds.yaml v5
   scoring/             points.py, scoring.yaml v5 (cases: open_risk_at 40), evaluate.py (ranking, expansion)
   cases/service.py     assess(), recompute_account (opens/resolves cases, queues explanations)
   ai/                  gateway.py (kill switch, masking, cache, budget, structured output, cost log),
@@ -149,11 +151,17 @@ backend/casefile/
                        outcomes 1h, email purge 6h), jobs.py
   outcomes/            tracker.py (6.1 checkpoints via as-of snapshots, plays table)
   api/                 main.py + routers: auth, accounts, connections, identity, queue, insights,
-                       cases, changes (inbox/plan/approve…/executor status), backtest
+                       cases, changes (inbox/plan/approve…/executor status), backtest, team (C1),
+                       mapping (C2), onboarding (C4)
+  onboarding.py        C4: modes setup/shadow/live, derived checklist, HubSpot connect, usage upload
+  secretbox.py         Fernet encryption of pasted read tokens (SECRETS_KEY)
+  invites.py           one-time invite links; one email = one organisation
+  db/tenant.py         C3 row-level security context (set_tenant, system_scope, set_process_system)
   synth/               synthetic company generator (ground_truth.json = planted stories)
-  cli.py               `uv run casefile <cmd>` (synth, bootstrap, sync, google-auth, recompute,
-                       explain, eval, evals, backtest, derive-outcomes, match-report, set-password…)
-backend/tests/         288 tests; fake_ai.py (FakeClient), fake_writers.py, factories.py, conftest.py
+  cli.py               `uv run casefile <cmd>` (synth, bootstrap, create-org, init-secrets-key, sync,
+                       google-auth, recompute, explain, eval, evals, backtest, derive-outcomes,
+                       match-report, set-password, db-roles, reapply-mapping…)
+backend/tests/         341 tests; fake_ai.py (FakeClient), fake_writers.py, factories.py, conftest.py
 frontend/src/          React 19 + Vite 7 + Tailwind 4 + TanStack Query + React Router 7
   pages/               Queue, Approvals (Inbox), Accounts, Account (as-of time machine + PlanPanel),
                        Backtest, Replay, BlindSpots, Identity, Connections, Audit, Settings, Login
@@ -189,7 +197,11 @@ Line length 110; mypy runs on `casefile/` (CI scope), not tests.
 
 - `.env` (app/worker zone) currently holds: `CASEFILE_ADMIN_PASSWORD`, `SESSION_SECRET`,
   `ANTHROPIC_API_KEY`, `AI_DAILY_BUDGET_USD=2`, `READ_HUBSPOT_TOKEN`, `GOOGLE_CLIENT_ID`,
-  `GOOGLE_CLIENT_SECRET`. Database URLs use the defaults in `config.py` (port 5433). There is no
+  `GOOGLE_CLIENT_SECRET`, `SECRETS_KEY` (Fernet key for tokens pasted during onboarding; created by
+  `casefile init-secrets-key`, never printed; losing it makes stored tokens unreadable),
+  `EXECUTOR_SEAL_PUBLIC_KEY` (`casefile init-executor-keys`; its private half is
+  `EXECUTOR_SEAL_PRIVATE_KEY` in `.env.executor`). Not yet set: `BREVO_API_KEY`, `MAIL_FROM_EMAIL`
+  (without them sign-up emails go to `data/outbox`). Store secrets with `casefile set-secret KEY`. Database URLs use the defaults in `config.py` (port 5433). There is no
   `READ_GOOGLE_REFRESH_TOKEN` yet (live Gmail/Calendar *reading* has never been connected).
 - `.env.executor` (write zone, chmod 600, read ONLY by `python -m casefile.executor`):
   `WRITE_HUBSPOT_TOKEN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `WRITE_GOOGLE_REFRESH_TOKEN`,
@@ -271,6 +283,40 @@ its loop also sends the 09:00 (Asia/Kolkata) morning digest to the workspace own
 
 ---
 
+## 11b. Row-level security (since 2026-10-11)
+
+- Every tenant table has RLS. The DB owner (dev, tests, migrations) bypasses it; production processes
+  log in as `casefile_runtime` and are subject to it. API sessions are tenant-scoped (org in the session
+  cookie); worker/executor/CLI call `set_process_system()`. A new code path that runs as the runtime role
+  without a tenant sees EMPTY tables — use `db/tenant.py` (`set_tenant`, `system_scope`), and extend
+  `tests/test_rls.py` (which runs the API as a non-owner role) when adding endpoints.
+
+## 11c. Organisation modes and onboarding (since 2026-10-11, ADR 0007 C4)
+
+- `org.settings["mode"]`: `setup` (no AI jobs — the worker skips them — and no writes), `shadow`
+  (executor records `would_execute`), `live`. Missing mode = setup. Lumora (dev) is `live`; the test
+  fixture org `test-org` is created `live`. `casefile/onboarding.py` holds the checklist and moves.
+- New company: `casefile create-org --slug … --name … --admin-email …` (prints an invite link once —
+  redirect it to a file in your session, never into the transcript). The admin finishes in /setup.
+- Credentials: no per-kind default any more — a read connection needs `secret_ref` (operator) or
+  `secret_enc` (pasted in the app). Executor = one organisation (`Executor(..., org_id=...)`).
+- Throwaway dev org `northwind-test` (admin `admin@northwind.test`, synthetic data from
+  `data/synth/onboarding-test`) was created to verify onboarding; it is in setup mode, so its queued
+  AI jobs are skipped. Its admin password is a generated test value in the session scratchpad only.
+
+## 11d. Self-service (since 2026-10-11, ADR 0008)
+
+- Strangers register at /register → pending `signup` row + email (Brevo, or `data/outbox` on localhost)
+  → /verify/<token> button creates the org (setup mode) and admin. /forgot emails a reset link.
+- Connections page (/connections): HubSpot read + write tokens, Google "Connect a mailbox"/"Allow
+  drafts" (web OAuth, callback `/api/oauth/google/callback`) or the company's own Google app, Slack
+  bot + app-level tokens from the manifest. Write credentials are SEALED for the executor
+  (`casefile/sealing.py`; only `casefile/executor/unseal.py` opens them). Never log or return them.
+- One executor serves all orgs (`executor/tenants.py`); the slackbot keeps one socket per workspace.
+- Dev test orgs created for verification: `northwind-test` (operator path) and `hooli-sign-up-test`
+  (self-service path, admin gavin@hooli.test); both in setup mode. Test passwords live only in the
+  session scratchpad.
+
 ## 12. Gotchas learned the hard way
 
 - Alembic + naming convention: pass existing constraint names through `op.f("ck_…")`, or Alembic
@@ -290,6 +336,12 @@ its loop also sends the 09:00 (Asia/Kolkata) morning digest to the workspace own
 - The preview launch config needs absolute paths (getcwd errors otherwise).
 - React lint forbids setState inside effects (derive state instead).
 - The user's shell may not be in the repo root — give commands with absolute paths.
+- `system_scope(session, False)` RESTORES the previous scope (it used to force tenant mode, which blinds
+  system-mode processes under RLS). Pair every `system_scope(s)` with `system_scope(s, False)`.
+- Creating roles inside concurrent test transactions deadlocks on `casefile_app` membership: tests use one
+  committed probe role (`casefile_rls_probe`).
+- HubSpot scope check without writing: POST an empty batch (`{"inputs": []}`) → 200/201 allowed, 403 not.
+  403 bodies list `requiredGranularScopes` (any-of).
 
 ---
 

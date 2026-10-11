@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from casefile.db.models import Account, AppUser, Contact, EntityType, FieldHistory, Org
-from casefile.ingest.util import canonical_json, chunks, field_mapping
+from casefile.ingest.util import canonical_json, chunks
 
 
 @dataclass
@@ -19,12 +19,19 @@ class NormalizeContext:
 
     session: Session
     org: Org
-    mapping: dict[str, Any] = field(default_factory=field_mapping)
+    mapping: dict[str, Any] = field(default_factory=dict)  # empty: this organisation's effective mapping
+    reapply: bool = False  # re-normalising stored raw records: derived history is updated in place
     touched_accounts: set[uuid.UUID] = field(default_factory=set)
     _accounts: dict[tuple[str, str], uuid.UUID | None] = field(default_factory=dict)
     _owners: dict[str, uuid.UUID | None] = field(default_factory=dict)
     _contacts: dict[tuple[str, str], tuple[uuid.UUID, str] | None] = field(default_factory=dict)
     _history: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.mapping:
+            from casefile.ingest.mapping import org_mapping
+
+            self.mapping = org_mapping(self.session, self.org.id)
 
     @property
     def org_id(self) -> uuid.UUID:
@@ -107,9 +114,11 @@ class NormalizeContext:
             return
         for batch in chunks(self._history, 1000):
             stmt = insert(FieldHistory).values(batch)
-            self.session.execute(
-                stmt.on_conflict_do_nothing(
-                    index_elements=["org_id", "entity_type", "entity_id", "field", "valid_from"]
+            keys = ["org_id", "entity_type", "entity_id", "field", "valid_from"]
+            if self.reapply:  # a new mapping can change what an old raw value means
+                self.session.execute(
+                    stmt.on_conflict_do_update(index_elements=keys, set_={"value": stmt.excluded.value})
                 )
-            )
+            else:
+                self.session.execute(stmt.on_conflict_do_nothing(index_elements=keys))
         self._history.clear()

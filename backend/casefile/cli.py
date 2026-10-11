@@ -19,6 +19,9 @@ app = typer.Typer(no_args_is_help=True, add_completion=False)
 @app.callback()
 def main() -> None:
     """Casefile command-line tools."""
+    from casefile.db.tenant import set_process_system
+
+    set_process_system()  # the CLI is an operator tool: it acts across organisations
 
 
 def _set_env(key: str, value: str, file: Path = REPO_ROOT / ".env") -> None:
@@ -90,6 +93,8 @@ def bootstrap(
             name=org_name,
             timezone=settings.org_timezone,
             internal_domains=domains,
+            # The synthetic demo company is live against the sandbox tools; a real one starts in setup.
+            mode="setup" if no_fixture else "live",
         )
         upsert_user(session, org, email=email, name="Admin", role=UserRole.admin, password=password)
         if not no_fixture:
@@ -129,8 +134,15 @@ def connect(
         org = session.scalar(select(Org).where(Org.slug == get_settings().org_slug))
         if org is None:
             raise typer.BadParameter("run `casefile bootstrap` first")
+        default_ref = {"hubspot": "READ_HUBSPOT_TOKEN", "gmail": "READ_GOOGLE_REFRESH_TOKEN"}
+        default_ref |= {"gcal": "READ_GOOGLE_REFRESH_TOKEN", "usage_sql": "READ_USAGE_DSN"}
         conn = ensure_connection(
-            session, org, ConnectionKind(kind), name=name, config=cfg, secret_ref=secret_ref or None
+            session,
+            org,
+            ConnectionKind(kind),
+            name=name,
+            config=cfg,
+            secret_ref=secret_ref or default_ref.get(kind),  # written down: there is no implicit default
         )
         typer.echo(f"Connection {conn.kind.value}/{conn.name} ready ({conn.id}).")
 
@@ -369,6 +381,139 @@ def link_slack(
         session.close()
 
 
+@app.command("init-secrets-key")
+def init_secrets_key(
+    rotate: bool = typer.Option(False, help="Replace an existing key (stored tokens stop working)."),
+) -> None:
+    """Create SECRETS_KEY in .env, used to encrypt tokens admins paste during onboarding. Never printed."""
+    from casefile.secretbox import new_key
+
+    if _env_value("SECRETS_KEY") and not rotate:
+        typer.echo("SECRETS_KEY already set; nothing changed.")
+        return
+    _set_env("SECRETS_KEY", new_key())
+    typer.echo(
+        "SECRETS_KEY written to .env (back it up with the database: without it, stored tokens are lost)."
+    )
+
+
+@app.command("init-executor-keys")
+def init_executor_keys(
+    rotate: bool = typer.Option(
+        False, help="Replace existing keys (every sealed write credential stops working)."
+    ),
+) -> None:
+    """Create the executor's sealing key pair: private half to .env.executor, public half to .env.
+
+    The web app seals write credentials that admins paste with the public half; only the executor can
+    open them. Nothing is printed."""
+    from casefile.sealing import new_keypair
+
+    executor_env = REPO_ROOT / ".env.executor"
+    if _env_value("EXECUTOR_SEAL_PUBLIC_KEY") and not rotate:
+        typer.echo("EXECUTOR_SEAL_PUBLIC_KEY already set; nothing changed.")
+        return
+    private, public = new_keypair()
+    _set_env("EXECUTOR_SEAL_PRIVATE_KEY", private, executor_env)
+    _set_env("EXECUTOR_SEAL_PUBLIC_KEY", public)
+    typer.echo("Sealing keys written: private half to .env.executor, public half to .env (back up both).")
+
+
+@app.command("set-secret")
+def set_secret(
+    key: str = typer.Argument(..., help="e.g. BREVO_API_KEY"),
+    file: str = typer.Option(".env", help=".env, .env.executor or .env.slackbot"),
+) -> None:
+    """Store a secret in an env file without it appearing on screen or in shell history (hidden prompt)."""
+    import re
+
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", key):
+        raise typer.BadParameter("KEY must be UPPER_SNAKE_CASE")
+    if file not in {".env", ".env.executor", ".env.slackbot"}:
+        raise typer.BadParameter("file must be .env, .env.executor or .env.slackbot")
+    value = typer.prompt(f"{key}", hide_input=True).strip()
+    if not value or "\n" in value:
+        raise typer.BadParameter("empty value")
+    _set_env(key, value, REPO_ROOT / file)
+    typer.echo(f"{key} saved to {file} ({len(value)} characters).")
+
+
+@app.command("set-ai-cap")
+def set_ai_cap(
+    org: str = typer.Option(..., help="Organisation slug"),
+    usd: float = typer.Option(..., help="Daily AI budget in USD for this organisation (0 stops AI)."),
+) -> None:
+    """Give one organisation its own daily AI cap (default: AI_DAILY_BUDGET_USD)."""
+    from casefile.audit.log import append as audit
+    from casefile.db.models import Org
+    from casefile.db.session import session_scope
+
+    if not 0 <= usd <= 1000:
+        raise typer.BadParameter("usd must be between 0 and 1000")
+    with session_scope() as session:
+        row = session.scalar(select(Org).where(Org.slug == org))
+        if row is None:
+            raise typer.BadParameter(f"organisation {org!r} not found")
+        before = (row.settings or {}).get("ai_daily_budget_usd")
+        row.settings = {**(row.settings or {}), "ai_daily_budget_usd": usd}
+        audit(
+            session,
+            row.id,
+            "ai_cap_changed",
+            actor_type="system",
+            actor_id="cli:set-ai-cap",
+            entity_type="org",
+            entity_id=str(row.id),
+            details={"from": before, "to": usd},
+        )
+    typer.echo(f"{org}: daily AI cap ${usd:.2f}")
+
+
+@app.command("create-org")
+def create_org(
+    slug: str = typer.Option(..., help="Short id, e.g. acme"),
+    name: str = typer.Option(..., help="Company name"),
+    admin_email: str = typer.Option(..., help="The company's first admin; gets a one-time invite link."),
+    admin_name: str = typer.Option("", help="Their name"),
+    internal_domain: list[str] = typer.Option(None, help="The company's own email domain(s); repeatable."),
+    timezone: str = typer.Option("UTC", help="IANA time zone, e.g. Asia/Kolkata"),
+) -> None:
+    """Onboard a new company: an organisation in setup mode (no AI, no writes) and its first admin.
+
+    Prints the admin's invite link once — send it to them yourself. They finish onboarding in the app.
+    """
+    import re
+    from zoneinfo import ZoneInfo
+
+    from casefile.bootstrap import ensure_org
+    from casefile.db.models import AppUser, Org, UserRole
+    from casefile.db.session import session_scope
+    from casefile.invites import email_in_other_org, issue_invite
+
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,62}", slug):
+        raise typer.BadParameter("slug: lowercase letters, digits and dashes")
+    ZoneInfo(timezone)
+    email = admin_email.strip().lower()
+    with session_scope() as session:
+        if session.scalar(select(Org).where(Org.slug == slug)):
+            raise typer.BadParameter(f"organisation {slug!r} already exists")
+        if email_in_other_org(session, email, None):
+            raise typer.BadParameter("that email already has a login with another organisation")
+        domains = [d.lower() for d in internal_domain or []] or [email.split("@", 1)[1]]
+        org = ensure_org(
+            session, slug=slug, name=name, timezone=timezone, internal_domains=domains, mode="setup"
+        )
+        user = AppUser(org_id=org.id, email=email, name=admin_name, role=UserRole.admin, is_active=False)
+        session.add(user)
+        session.flush()
+        link, expires = issue_invite(
+            session, user, actor_type="system", actor_id="cli:create-org", created_by=None
+        )
+    typer.echo(f"Organisation {slug!r} created in setup mode (no AI spend, no writes).")
+    typer.echo(f"Invite for {email} — works once, expires {expires:%Y-%m-%d %H:%M} UTC. Send it yourself:")
+    typer.echo(link)
+
+
 @app.command("db-roles")
 def db_roles(login: str = typer.Option("casefile_runtime", help="Login role the app processes use.")) -> None:
     """Create or update the runtime database login (member of casefile_app: no UPDATE/DELETE on the
@@ -392,6 +537,20 @@ def db_roles(login: str = typer.Option("casefile_runtime", help="Login role the 
         conn.exec_driver_sql(f"{verb} ROLE {login} LOGIN PASSWORD '{password}'")
         conn.exec_driver_sql(f"GRANT casefile_app TO {login}")
     typer.echo(f"{login}: {'updated' if exists else 'created'} (member of casefile_app)")
+
+
+@app.command("reapply-mapping")
+def reapply_mapping_cmd() -> None:
+    """Rebuild stored data with the organisation's current field mapping (no AI, no re-fetch)."""
+    from casefile.ingest.mapping import reapply
+
+    session, org = _org_session()
+    try:
+        out = reapply(session, org.id)
+        session.commit()
+        typer.echo(json.dumps(out))
+    finally:
+        session.close()
 
 
 @app.command("ranking-report")

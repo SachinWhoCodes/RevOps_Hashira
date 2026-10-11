@@ -69,8 +69,10 @@ def run_now(
     db: Session = Depends(get_db), org: Org = Depends(current_org), _: AppUser = Depends(require_admin)
 ) -> dict[str, Any]:
     """Re-derive labels and run the back-test (about 15 seconds on 200 accounts)."""
+    from casefile.onboarding import data_label
+
     derive_outcomes(db, org)
-    run = run_backtest(db, org, BacktestConfig())
+    run = run_backtest(db, org, BacktestConfig(label=data_label(db, org)))
     db.commit()
     return _run_view(run)
 

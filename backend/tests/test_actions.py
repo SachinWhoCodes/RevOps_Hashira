@@ -7,6 +7,7 @@ sandbox run, not by tests.
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -278,7 +279,7 @@ def test_reject_records_a_decision_and_never_executes(world: World) -> None:
     reject_item(world.db, world.admin, note.id, comment="not useful")
     world.db.commit()
     writers = fake_writers()
-    assert Executor(world.db, writers).process(note.id) is None
+    assert Executor(world.db, writers, org_id=world.org.id).process(note.id) is None
     assert writers["hubspot"].writes == []
 
 
@@ -291,7 +292,7 @@ def test_happy_path_writes_once_and_audits(world: World) -> None:
     approve_item(world.db, world.admin, task.id)
     world.db.commit()
     writers = fake_writers()
-    outcome = Executor(world.db, writers).process(task.id)
+    outcome = Executor(world.db, writers, org_id=world.org.id).process(task.id)
     assert outcome is not None and outcome.status == "succeeded"
     assert len(writers["hubspot"].writes) == 1
     assert writers["hubspot"].writes[0].marker == f"cf{task.id.hex}"
@@ -311,7 +312,7 @@ def test_approve_twice_gives_one_write(world: World) -> None:
         approve_item(world.db, world.admin, task.id)
     world.db.commit()
     writers = fake_writers()
-    ex = Executor(world.db, writers)
+    ex = Executor(world.db, writers, org_id=world.org.id)
     ex.process(task.id)
     assert ex.process(task.id) is None  # no longer queued
     task.status = S.queued  # simulate a stray re-queue (bug or manual DB edit)
@@ -331,11 +332,11 @@ def test_crash_after_write_is_reconciled_without_duplicate(world: World) -> None
         raise RuntimeError("executor killed between the external call and the commit")
 
     with pytest.raises(RuntimeError):
-        Executor(world.db, writers, after_write=crash).process(note.id)
+        Executor(world.db, writers, org_id=world.org.id, after_write=crash).process(note.id)
     world.db.rollback()
     world.db.refresh(note)
     assert note.status == S.executing
-    outcomes = Executor(world.db, writers).reconcile(older_than=timedelta(0))
+    outcomes = Executor(world.db, writers, org_id=world.org.id).reconcile(older_than=timedelta(0))
     assert [o.status for o in outcomes if o.item_id == str(note.id)] == ["succeeded"]
     world.db.refresh(note)
     assert note.status == S.succeeded and len(writers["hubspot"].writes) == 1
@@ -350,11 +351,11 @@ def test_crash_before_write_is_requeued_and_written_once(world: World) -> None:
     writers = fake_writers()
     writers["hubspot"].fail = RuntimeError("killed before the call")
     with pytest.raises(RuntimeError):
-        Executor(world.db, writers).process(task.id)
+        Executor(world.db, writers, org_id=world.org.id).process(task.id)
     world.db.rollback()
-    outcomes = Executor(world.db, writers).reconcile(older_than=timedelta(0))
+    outcomes = Executor(world.db, writers, org_id=world.org.id).reconcile(older_than=timedelta(0))
     assert [o.status for o in outcomes if o.item_id == str(task.id)] == ["requeued"]
-    assert Executor(world.db, writers).process(task.id).status == "succeeded"  # type: ignore[union-attr]
+    assert Executor(world.db, writers, org_id=world.org.id).process(task.id).status == "succeeded"  # type: ignore[union-attr]
     assert len(writers["hubspot"].writes) == 1
 
 
@@ -366,7 +367,7 @@ def test_changed_crm_value_becomes_conflict_then_needs_a_new_approval(world: Wor
     world.db.commit()
     writers = fake_writers()
     writers["hubspot"].fields["hs_next_step"] = "Someone typed this in HubSpot after the proposal"
-    outcome = Executor(world.db, writers).process(step.id)
+    outcome = Executor(world.db, writers, org_id=world.org.id).process(step.id)
     assert outcome is not None and outcome.status == "conflict"
     assert writers["hubspot"].writes == []
     world.live.values[step.target_ref["deal"]] = "Someone typed this in HubSpot after the proposal"
@@ -375,7 +376,7 @@ def test_changed_crm_value_becomes_conflict_then_needs_a_new_approval(world: Wor
     assert step.status == S.proposed and step.payload_hash is None
     approve_item(world.db, world.admin, step.id)
     world.db.commit()
-    assert Executor(world.db, writers).process(step.id).status == "succeeded"  # type: ignore[union-attr]
+    assert Executor(world.db, writers, org_id=world.org.id).process(step.id).status == "succeeded"  # type: ignore[union-attr]
     assert writers["hubspot"].fields["hs_next_step"] == (step.final_payload or {})["value"]
     world.live.values.clear()
 
@@ -386,7 +387,7 @@ def test_unapproved_item_is_refused_and_logged(world: World) -> None:
     task.status = S.queued  # someone bypasses the approval service
     world.db.commit()
     writers = fake_writers()
-    outcome = Executor(world.db, writers).process(task.id)
+    outcome = Executor(world.db, writers, org_id=world.org.id).process(task.id)
     assert outcome is not None and outcome.status == "refused"
     assert writers["hubspot"].writes == [] and task.status == S.failed
     assert "execution_refused" in audit_actions(world, task)
@@ -406,7 +407,7 @@ def test_tampering_after_approval_is_refused(world: World, field: str) -> None:
         task.before = {"hs_next_step": "tampered"}
     world.db.commit()
     writers = fake_writers()
-    outcome = Executor(world.db, writers).process(task.id)
+    outcome = Executor(world.db, writers, org_id=world.org.id).process(task.id)
     assert outcome is not None and outcome.status == "refused"
     assert "no longer matches" in outcome.detail["reason"]
     assert writers["hubspot"].writes == []
@@ -426,7 +427,7 @@ def test_audit_failure_means_no_write(world: World, monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(audit_log, "append", failing)
     writers = fake_writers()
-    outcome = Executor(world.db, writers).process(task.id)
+    outcome = Executor(world.db, writers, org_id=world.org.id).process(task.id)
     assert outcome is not None and outcome.status == "audit_failed"
     assert writers["hubspot"].writes == []
     world.db.refresh(task)
@@ -440,10 +441,10 @@ def test_rejected_write_fails_and_can_be_retried(world: World) -> None:
     world.db.commit()
     writers = fake_writers()
     writers["hubspot"].fail = WriteRejected("rate limited", retryable=True)
-    assert Executor(world.db, writers).process(task.id).status == "failed"  # type: ignore[union-attr]
+    assert Executor(world.db, writers, org_id=world.org.id).process(task.id).status == "failed"  # type: ignore[union-attr]
     retry_item(world.db, world.admin, task.id)
     world.db.commit()
-    assert Executor(world.db, writers).process(task.id).status == "succeeded"  # type: ignore[union-attr]
+    assert Executor(world.db, writers, org_id=world.org.id).process(task.id).status == "succeeded"  # type: ignore[union-attr]
     assert len(writers["hubspot"].writes) == 1
 
 
@@ -454,14 +455,14 @@ def test_unknown_outcome_is_resolved_by_marker(world: World) -> None:
     world.db.commit()
     writers = fake_writers()
     writers["slack"].fail = WriteUnknown("timeout after sending")
-    outcome = Executor(world.db, writers).process(dm.id)
+    outcome = Executor(world.db, writers, org_id=world.org.id).process(dm.id)
     assert outcome is not None and outcome.status == "failed"  # not found by marker → safe to retry
     assert dm.external_result["retryable"] is True
     unverifiable = FakeWriter("slack", verifiable=False)
     retry_item(world.db, world.admin, dm.id)
     world.db.commit()
     unverifiable.fail = WriteUnknown("timeout after sending")
-    outcome = Executor(world.db, {"slack": unverifiable}).process(dm.id)
+    outcome = Executor(world.db, {"slack": unverifiable}, org_id=world.org.id).process(dm.id)
     assert outcome is not None and outcome.status == "unknown"
     with pytest.raises(ApprovalError, match="unknown"):
         retry_item(world.db, world.admin, dm.id)  # a person must check Slack first
@@ -472,12 +473,61 @@ def test_shadow_mode_writes_nothing(world: World) -> None:
     approve_tier1(world.db, world.admin, cs.id)
     world.db.commit()
     writers = fake_writers()
-    ex = Executor(world.db, writers, shadow=True)
+    ex = Executor(world.db, writers, org_id=world.org.id, shadow=True)
     for item in items(world, cs).values():
         if item.status == S.queued:
             ex.process(item.id)
     assert all(not w.writes for w in writers.values())
     assert {i.status for i in items(world, cs).values()} <= {S.would_execute, S.proposed}
+
+
+def _set_mode(w: World, mode: str) -> None:
+    w.org.settings = {**(w.org.settings or {}), "mode": mode}
+    w.db.commit()
+
+
+def test_an_organisation_not_yet_live_is_shadowed_by_the_executor(world: World) -> None:
+    """C4: the organisation's mode decides, not only the process flag; read fresh for every line."""
+    cs = fresh_plan(world)
+    approve_tier1(world.db, world.admin, cs.id)
+    world.db.commit()
+    writers = fake_writers()
+    ex = Executor(world.db, writers, org_id=world.org.id)  # process flag: not shadow
+    queued = [i for i in items(world, cs).values() if i.status == S.queued]
+    try:
+        _set_mode(world, "shadow")
+        ex.process(queued[0].id)
+        assert not any(w.writes for w in writers.values())
+        world.db.refresh(queued[0])
+        assert queued[0].status == S.would_execute and queued[0].external_result["checked_live"] is True
+        # Without any write access yet, shadow still records what would happen (nothing checked live).
+        ex_no_writers = Executor(world.db, {}, org_id=world.org.id)
+        assert ex_no_writers.process(queued[1].id).status == "would_execute"  # type: ignore[union-attr]
+        world.db.refresh(queued[1])
+        assert queued[1].external_result["checked_live"] is False
+        _set_mode(world, "setup")
+        assert ex.process(queued[2].id).status == "would_execute"  # type: ignore[union-attr]
+    finally:
+        _set_mode(world, "live")
+    assert not any(w.writes for w in writers.values())
+
+
+def test_an_executor_never_touches_another_organisations_lines(world: World) -> None:
+    """Writers hold one company's credentials: an executor for another organisation must not pick up
+    this one's approved lines, in the queue, by id, or when reconciling."""
+    cs = fresh_plan(world)
+    approve_tier1(world.db, world.admin, cs.id)
+    world.db.commit()
+    writers = fake_writers()
+    other = Executor(world.db, writers, org_id=uuid.uuid4())
+    queued = [i for i in items(world, cs).values() if i.status == S.queued]
+    assert queued
+    assert other.run_once(limit=500) == []
+    assert all(other.process(i.id) is None for i in queued)
+    assert other.reconcile(older_than=timedelta(0)) == []
+    assert not any(w.writes for w in writers.values())
+    assert {i.status for i in items(world, cs).values() if i.id in {q.id for q in queued}} == {S.queued}
+    Executor(world.db, writers, org_id=world.org.id).run_once(limit=500)  # leave the queue clean
 
 
 def test_full_change_set_reaches_every_target(world: World) -> None:
@@ -487,7 +537,7 @@ def test_full_change_set_reaches_every_target(world: World) -> None:
     approve_item(world.db, world.admin, by_type["gmail_draft"].id, edits={"subject": "Checking in"})
     world.db.commit()
     writers = fake_writers()
-    ex = Executor(world.db, writers)
+    ex = Executor(world.db, writers, org_id=world.org.id)
     for item in by_type.values():
         ex.process(item.id)
     world.db.refresh(cs)
@@ -560,7 +610,7 @@ def test_injection_suite_end_to_end_makes_zero_unapproved_writes(world: World) -
                 assert fragment.lower() not in text.lower(), (a["id"], fragment)
     assert all(i.status in (S.proposed, S.blocked) for i in planned)
     writers = fake_writers()
-    Executor(world.db, writers).run_once(limit=500)
+    Executor(world.db, writers, org_id=world.org.id).run_once(limit=500)
     written = [v for w in writers.values() for v in w.writes]
     planned_ids = {i.id for i in planned}
     assert not any(v.id in planned_ids for v in written), "nothing from this plan is written without approval"

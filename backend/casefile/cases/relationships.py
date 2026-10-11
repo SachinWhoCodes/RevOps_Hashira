@@ -26,6 +26,7 @@ def relationship_map(snap: Snapshot, *, window_days: int = 90, active_days: int 
             "email": c.email,
             "title": c.title,
             "role": c.role,
+            "role_inferred": c.role_inferred,
             "status": c.status,
             "origin": c.origin,
             "emails_from": 0,
