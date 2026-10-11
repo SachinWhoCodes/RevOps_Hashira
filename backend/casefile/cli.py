@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -415,6 +415,71 @@ def match_report(truth: Path = typer.Option(None, help="ground_truth.json (defau
     finally:
         session.close()
     typer.echo(json.dumps(report, indent=2))
+
+
+@app.command("derive-outcomes")
+def derive_outcomes_cmd() -> None:
+    """Label past renewals (renewed / downgraded / churned / late) from CRM deal history."""
+    from casefile.backtest.outcomes import derive_outcomes
+
+    session, org = _org_session()
+    try:
+        report = derive_outcomes(session, org)
+        session.commit()
+        typer.echo(json.dumps(report.__dict__, indent=2))
+    finally:
+        session.close()
+
+
+@app.command()
+def backtest(
+    split: str = typer.Option("", help="Tune on renewals before this date (default: median)."),
+    label: str = typer.Option("simulated", help="observed | simulated (synthetic data is simulated)."),
+) -> None:
+    """Time-machine back-test over past renewals; prints the metrics and stores the run."""
+    from casefile.backtest.outcomes import derive_outcomes
+    from casefile.backtest.runner import BacktestConfig, run_backtest
+    from casefile.db.models import EvidenceLabel
+
+    session, org = _org_session()
+    try:
+        derive_outcomes(session, org)
+        cfg = BacktestConfig(
+            split_date=date.fromisoformat(split) if split else None, label=EvidenceLabel(label)
+        )
+        run = run_backtest(session, org, cfg)
+        session.commit()
+        typer.echo(json.dumps({"run_id": str(run.id), **run.metrics}, indent=2, default=str))
+    finally:
+        session.close()
+
+
+@app.command()
+def evals(
+    ai: bool = typer.Option(
+        False, help="Also run the AI suites (costs money; capped by AI_DAILY_BUDGET_USD)."
+    ),
+    tests: bool = typer.Option(True, help="Run the test-backed suites (pytest on the test database)."),
+    out: Path = typer.Option(None, help="Also write the markdown table here (e.g. docs/RESULTS.md)."),
+) -> None:
+    """Run every evaluation suite; record eval_run rows and print a labelled markdown table."""
+    from casefile.evals.run_evals import run_all
+
+    session, org = _org_session()
+    try:
+        results, markdown = run_all(session, org, ai=ai, tests=tests)
+        session.commit()
+    finally:
+        session.close()
+    results_dir = REPO_ROOT / "evals" / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    (results_dir / f"evals-{stamp}.md").write_text(markdown)
+    if out:
+        out.write_text(markdown)
+    typer.echo(markdown)
+    if any(not r.ok for r in results):
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

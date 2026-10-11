@@ -1,0 +1,116 @@
+# Playbooks: which play fits a case, and the ordered actions it proposes.
+# The first play (top to bottom) whose kind matches and whose conditions hold is used.
+# Text in templates is filled by code from verified facts; only the Gmail draft is worded by AI
+# (and checked). Placeholders: {account}, {recipient_name}, {recipient_first}, {owner_name},
+# {renewal_date}, {headline}.
+version: 1
+
+plays:
+  - id: champion_departure
+    kind: risk
+    all_of: [champion_departure]
+    recipient: economic_buyer
+    purpose: >-
+      Our main contact has left the customer. Reach the economic buyer, introduce yourself as the
+      account owner and ask for a short call to make sure the team is supported before renewal.
+    actions:
+      - type: crm_task
+        subject: "Reach {recipient_name} at {account}: main contact has left"
+        due_in_days: 2
+        priority: HIGH
+      - type: gmail_draft
+      - type: crm_note
+      - type: crm_next_step
+        value: "Intro call with {recipient_name} before renewal on {renewal_date}"
+      - type: slack_dm
+
+  - id: champion_silent_renewal_near
+    kind: risk
+    all_of: [champion_silence, renewal_proximity]
+    recipient: champion
+    fallback_recipient: economic_buyer
+    purpose: >-
+      Our main contact has stopped replying and the renewal is close. Send a short, friendly
+      check-in that offers a call, and line up a second contact.
+    actions:
+      - type: crm_task
+        subject: "Re-engage {recipient_name} at {account} before renewal on {renewal_date}"
+        due_in_days: 2
+        priority: HIGH
+      - type: gmail_draft
+      - type: crm_note
+      - type: crm_next_step
+        value: "Renewal check-in with {recipient_name} before {renewal_date}"
+      - type: slack_dm
+
+  - id: usage_decline
+    kind: risk
+    all_of: [usage_decline]
+    recipient: champion
+    fallback_recipient: economic_buyer
+    purpose: >-
+      Product use has dropped. Offer a short working session to understand what changed and help
+      the team get value again. Do not quote our internal usage numbers to the customer.
+    actions:
+      - type: crm_task
+        subject: "Usage review with {account}: book a working session"
+        due_in_days: 3
+        priority: HIGH
+      - type: gmail_draft
+      - type: crm_note
+      - type: crm_next_step
+        value: "Usage review session with {recipient_name}"
+      - type: slack_dm
+
+  - id: meeting_gap
+    kind: risk
+    all_of: [meeting_gap]
+    recipient: champion
+    fallback_recipient: economic_buyer
+    purpose: >-
+      We have not met this customer in a long time. Propose a short check-in call.
+    actions:
+      - type: crm_task
+        subject: "Book a check-in with {account}"
+        due_in_days: 5
+        priority: MEDIUM
+      - type: gmail_draft
+      - type: crm_note
+      - type: slack_dm
+
+  - id: missing_next_step
+    kind: risk
+    all_of: [missing_next_step]
+    purpose: CRM hygiene only — the renewal has no agreed next step.
+    actions:
+      - type: crm_task
+        subject: "Agree a next step on the {account} renewal"
+        due_in_days: 3
+        priority: MEDIUM
+      - type: slack_dm
+
+  - id: expansion_seats
+    kind: expansion
+    any_of: [seat_saturation, new_team_adoption, upgrade_interest]
+    recipient: champion
+    fallback_recipient: economic_buyer
+    purpose: >-
+      The customer is growing into the product. Offer a short conversation about how more teams
+      could get set up. Do not mention prices, seat counts we sell, or discounts.
+    actions:
+      - type: crm_task
+        subject: "Expansion conversation with {account}"
+        due_in_days: 5
+        priority: MEDIUM
+      - type: gmail_draft
+      - type: crm_note
+      - type: crm_next_step
+        value: "Expansion conversation with {recipient_name}"
+      - type: slack_dm
+
+fallback:
+  id: review_manually
+  purpose: No play fits these signals; the owner should review the case.
+  actions:
+    - type: review_manually
+      text: "Review {account}: {headline}"

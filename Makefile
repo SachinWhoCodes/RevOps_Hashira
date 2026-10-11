@@ -3,7 +3,7 @@ COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo "docker compos
 UV := cd backend && uv run
 TODAY ?= $(shell date +%Y-%m-%d)
 
-.PHONY: help up down db migrate reset synth seed bootstrap sync api worker web test lint fmt typecheck check e2e load
+.PHONY: help up down db migrate reset synth seed bootstrap sync api worker executor executor-once sandbox-setup evals backtest web test lint fmt typecheck check e2e load
 
 help:
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-12s %s\n", $$1, $$2}'
@@ -42,6 +42,15 @@ api: ## Run the API with reload on :8000
 worker: ## Run the background worker (scheduled syncs, job queue)
 	$(UV) python -m casefile.worker
 
+executor: ## Run the executor (write zone; reads .env.executor). SHADOW=1 records would_execute only
+	$(UV) python -m casefile.executor run $(if $(SHADOW),--shadow,)
+
+executor-once: ## Process approved lines once and print the outcomes
+	$(UV) python -m casefile.executor once
+
+sandbox-setup: ## Connect sandbox write tools and mirror open-case deals into the HubSpot test portal
+	$(UV) python -m casefile.executor sandbox-setup $(if $(OWNER),--owner-id $(OWNER),)
+
 web: ## Run the frontend dev server on :5173
 	cd frontend && pnpm dev
 
@@ -62,6 +71,12 @@ typecheck: ## Type-check backend and frontend
 	cd frontend && pnpm typecheck
 
 check: lint typecheck test ## Everything CI runs
+
+evals: ## Run every free evaluation suite and refresh docs/RESULTS.md (AI suites: make evals AI=1)
+	$(UV) casefile evals --out ../docs/RESULTS.md $(if $(AI),--ai,)
+
+backtest: ## Time-machine back-test over past renewals (labels derived from deal history)
+	$(UV) casefile backtest
 
 load: ## Load test: 1,000 accounts x 90 days through the full sync pipeline
 	$(UV) python -m casefile.tools.load_test --accounts 1000 --days 90

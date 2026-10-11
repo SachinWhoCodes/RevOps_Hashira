@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Hard stop on AI spend per organisation per UTC day (cost control, plan section 8).
     ai_daily_budget_usd: float = 10.0
 
+    # Phase 4: propose a change set as soon as an open case has a written explanation.
+    auto_plan_cases: bool = True
+
     crm_sync_interval_minutes: int = 15
     gmail_sync_interval_minutes: int = 5
     # A connection is "stale" when its last success is older than this many sync intervals.

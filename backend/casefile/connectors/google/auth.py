@@ -22,6 +22,7 @@ from casefile.connectors.base import AuthError
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+CONSENT_WAIT_SECONDS = 600
 
 SCOPES = {
     # Read zone: sync only.
@@ -79,7 +80,9 @@ def interactive_consent(client_id: str, client_secret: str, zone: str) -> str:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(self.path).query))
-            result.update(query)
+            # Only Google's redirect carries state; ignore stray requests (favicon, prefetch).
+            if "state" in query:
+                result.update(query)
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"Casefile: consent received. You can close this tab.")
@@ -88,6 +91,7 @@ def interactive_consent(client_id: str, client_secret: str, zone: str) -> str:
             return
 
     server = HTTPServer(("127.0.0.1", 0), Handler)
+    server.timeout = 1  # handle_request returns every second so we can stop on time
     redirect = f"http://127.0.0.1:{server.server_port}"
     url = (
         AUTH_URL
@@ -106,14 +110,25 @@ def interactive_consent(client_id: str, client_secret: str, zone: str) -> str:
             }
         )
     )
-    thread = threading.Thread(target=server.handle_request, daemon=True)
+    deadline = time.time() + CONSENT_WAIT_SECONDS
+
+    def serve() -> None:
+        while "state" not in result and time.time() < deadline:
+            server.handle_request()
+
+    thread = threading.Thread(target=serve, daemon=True)
     thread.start()
     print(f"Opening the browser for Google consent ({zone} scopes). If it does not open, visit:\n{url}")
+    print(f"Waiting up to {CONSENT_WAIT_SECONDS // 60} minutes for you to finish in the browser…")
     webbrowser.open(url)
-    thread.join(timeout=300)
+    thread.join(timeout=CONSENT_WAIT_SECONDS + 5)
     server.server_close()
     if result.get("state") != state or "code" not in result:
-        raise AuthError(f"consent failed or timed out: {result.get('error', 'no code received')}")
+        error = result.get("error", "no reply from Google")
+        raise AuthError(
+            f"consent failed or timed out: {error}. If Google showed 'Access blocked', add the mailbox as a "
+            "test user (Google Cloud Console → Google Auth Platform → Audience → Test users) and run again."
+        )
     resp = httpx.post(
         TOKEN_URL,
         data={

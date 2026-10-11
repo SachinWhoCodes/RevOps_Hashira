@@ -53,10 +53,37 @@ demo.
 
 1. Create a Slack workspace for the team and a Slack app in it, with **Socket Mode** on (no public
    URL needed).
-2. Bot scopes: `chat:write`, `im:write`, `users:read`, `users:read.email`. App-level token scope:
-   `connections:write`.
+2. Bot scopes: `chat:write`, `im:write`, `users:read`, `users:read.email` (optional `im:history`
+   for DM reconciliation). App-level token scope: `connections:write`.
 3. Install the app to the workspace. Bot token → `.env.executor` as `SLACK_BOT_TOKEN`; app token →
    `SLACK_APP_TOKEN`.
+
+## 3b. Phase 4 write path (executor) — what is set up and how to run it
+
+Verified live on 2026-10-11 against HubSpot portal 247655945 (throwaway) and Slack workspace
+"Acadable".
+
+- **HubSpot write app (least privilege, observed):** it can create tasks, notes and deals and update
+  deals; it cannot create companies or contacts and has no read scopes. The executor therefore does
+  its checks (live next-step value, marker search) with the *read* token from `.env` and writes with
+  the write token from `.env.executor`.
+- **Slack:** DMs need `chat:write` + `im:write`; the workspace's primary owner (found with
+  `users:read`) receives every sandbox DM, labelled with the owner it was meant for. Optional
+  `im:history` lets crash recovery check whether a DM was already posted; without it, an
+  uncertain DM is marked "outcome unknown — check Slack" and never re-sent automatically.
+- **Gmail drafts:** run `cd backend && uv run casefile google-auth --zone write` once (consent
+  screen asks for `gmail.compose`; the token is stored in `.env.executor`). Then re-run
+  sandbox-setup so the Gmail write connection records the mailbox.
+
+```
+make sandbox-setup OWNER=100856373   # Slack owner lookup, Gmail mailbox, mirror open-case deals
+make executor-once                   # perform approved lines once and print outcomes
+make executor                        # the loop (SHADOW=1 to record would_execute only)
+```
+
+The mirror copies each open case's renewal deal into the portal (deal description says it is a
+sandbox mirror of synthetic data) and records the mapping in `external_ref`. Re-running reuses
+existing copies.
 
 ## 4. Seeding the sandbox with the synthetic company
 

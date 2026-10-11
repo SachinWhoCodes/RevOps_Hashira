@@ -79,12 +79,13 @@ def ensure_connection(
     name: str = "default",
     config: dict[str, Any] | None = None,
     secret_ref: str | None = None,
+    zone: Zone = Zone.read,
 ) -> Connection:
     conn = session.scalar(
         select(Connection).where(
             Connection.org_id == org.id,
             Connection.kind == kind,
-            Connection.zone == Zone.read,
+            Connection.zone == zone,
             Connection.name == name,
         )
     )
@@ -92,7 +93,7 @@ def ensure_connection(
         conn = Connection(
             org_id=org.id,
             kind=kind,
-            zone=Zone.read,
+            zone=zone,
             name=name,
             config=config or {},
             secret_ref=secret_ref,

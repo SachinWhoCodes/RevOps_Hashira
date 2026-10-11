@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -106,27 +109,87 @@ def config(org: Org = Depends(current_org)) -> dict[str, Any]:
     }
 
 
-@router.get("/audit")
+def _audit_row(r: AuditLog) -> dict[str, Any]:
+    return {
+        "seq": r.seq,
+        "ts": r.ts.isoformat(),
+        "actor": f"{r.actor_type}:{r.actor_id}" if r.actor_id else r.actor_type,
+        "action": r.action,
+        "entity_type": r.entity_type,
+        "entity_id": r.entity_id,
+        "approval_id": str(r.approval_id) if r.approval_id else None,
+        "details": r.details,
+        "evidence_count": len(r.evidence_ids or []),
+        "model": r.model,
+        "prompt_version": r.prompt_version,
+        "hash": r.hash,
+        "prev_hash": r.prev_hash,
+    }
+
+
+@router.get("/audit", response_model=None)
 def audit_log(
-    limit: int = 200, db: Session = Depends(get_db), org: Org = Depends(current_org)
-) -> list[dict[str, Any]]:
-    rows = db.scalars(
-        select(AuditLog).where(AuditLog.org_id == org.id).order_by(AuditLog.seq.desc()).limit(limit)
-    )
-    return [
-        {
-            "seq": r.seq,
-            "ts": r.ts.isoformat(),
-            "actor": f"{r.actor_type}:{r.actor_id}" if r.actor_id else r.actor_type,
-            "action": r.action,
-            "entity_type": r.entity_type,
-            "entity_id": r.entity_id,
-            "details": r.details,
-            "evidence_count": len(r.evidence_ids or []),
-            "hash": r.hash[:12],
-        }
-        for r in rows
-    ]
+    limit: int = Query(200, le=5000),
+    action: str | None = None,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    actor_type: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    format: str = Query("json", pattern="^(json|csv|download)$"),
+    db: Session = Depends(get_db),
+    org: Org = Depends(current_org),
+) -> list[dict[str, Any]] | Response:
+    q = select(AuditLog).where(AuditLog.org_id == org.id)
+    if action:
+        q = q.where(AuditLog.action.startswith(action))
+    if entity_type:
+        q = q.where(AuditLog.entity_type == entity_type)
+    if entity_id:
+        q = q.where(AuditLog.entity_id == entity_id)
+    if actor_type:
+        q = q.where(AuditLog.actor_type == actor_type)
+    if since:
+        q = q.where(AuditLog.ts >= since)
+    if until:
+        q = q.where(AuditLog.ts <= until)
+    rows = [_audit_row(r) for r in db.scalars(q.order_by(AuditLog.seq.desc()).limit(limit))]
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    if format == "csv":
+        buf = io.StringIO()
+        cols = [
+            "seq",
+            "ts",
+            "actor",
+            "action",
+            "entity_type",
+            "entity_id",
+            "approval_id",
+            "model",
+            "prompt_version",
+            "evidence_count",
+            "hash",
+            "prev_hash",
+            "details",
+        ]
+        writer = csv.DictWriter(buf, fieldnames=cols)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(
+                {**{c: r.get(c) for c in cols}, "details": json.dumps(r["details"], sort_keys=True)}
+            )
+        return Response(
+            buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="casefile-audit-{stamp}.csv"'},
+        )
+    if format == "download":
+        return Response(
+            json.dumps(rows, indent=2, default=str),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="casefile-audit-{stamp}.json"'},
+        )
+    return rows
 
 
 @router.get("/audit/verify")

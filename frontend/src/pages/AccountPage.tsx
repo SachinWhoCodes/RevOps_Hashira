@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type Timeline, type TimelineEvent } from "../api";
 import AssessmentPanel from "../components/AssessmentPanel";
+import PlanPanel from "../components/PlanPanel";
 import UsageChart from "../components/UsageChart";
 import { Badge, ErrorNote, Loading, Panel } from "../components/ui";
 import { ago, date, dateTime, label, money } from "../format";
@@ -133,6 +134,8 @@ export default function AccountPage() {
       {t?.exists && t.assessment && (
         <AssessmentPanel a={t.assessment} cases={t.cases} explanation={t.explanation} asOfParam={asOfParam} accountId={t.account.id} />
       )}
+      {t?.exists && !asOfParam &&
+        (t.cases ?? []).filter((c) => c.status === "open").map((c) => <PlanPanel key={c.id} caseId={c.id} accountId={t.account.id} />)}
       {t?.exists && (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
           <div className="space-y-4">

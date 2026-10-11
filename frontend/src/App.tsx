@@ -6,11 +6,14 @@ import { Loading } from "./components/ui";
 import AccountPage from "./pages/AccountPage";
 import AccountsPage from "./pages/AccountsPage";
 import AuditPage from "./pages/AuditPage";
+import BacktestPage from "./pages/BacktestPage";
 import BlindSpotsPage from "./pages/BlindSpotsPage";
 import ConnectionsPage from "./pages/ConnectionsPage";
 import IdentityPage from "./pages/IdentityPage";
+import InboxPage from "./pages/InboxPage";
 import LoginPage from "./pages/LoginPage";
 import QueuePage from "./pages/QueuePage";
+import ReplayPage from "./pages/ReplayPage";
 import SettingsPage from "./pages/SettingsPage";
 
 export function useMe() {
@@ -41,7 +44,9 @@ function Shell() {
         </div>
         <nav className="flex flex-wrap gap-1 px-2 pb-3 md:block md:space-y-0.5">
           <NavLink to="/queue" className={link}>Queue</NavLink>
+          <NavLink to="/approvals" className={link}>Approvals</NavLink>
           <NavLink to="/accounts" className={link}>Accounts</NavLink>
+          <NavLink to="/backtest" className={link}>Back-test</NavLink>
           <NavLink to="/blind-spots" className={link}>Blind spots</NavLink>
           <NavLink to="/identity" className={link}>Unmatched records</NavLink>
           <NavLink to="/connections" className={link}>Connections</NavLink>
@@ -69,6 +74,9 @@ export default function App() {
       <Route element={<Shell />}>
         <Route path="/" element={<Navigate to="/queue" replace />} />
         <Route path="/queue" element={<QueuePage />} />
+        <Route path="/approvals" element={<InboxPage />} />
+        <Route path="/backtest" element={<BacktestPage />} />
+        <Route path="/backtest/replay/:accountId" element={<ReplayPage />} />
         <Route path="/blind-spots" element={<BlindSpotsPage />} />
         <Route path="/audit" element={<AuditPage />} />
         <Route path="/settings" element={<SettingsPage />} />

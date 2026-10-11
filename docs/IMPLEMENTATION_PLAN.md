@@ -420,6 +420,12 @@ Every table has `org_id`. Timestamps are stored in UTC; day boundaries are compu
 - The audit chain verifies.
 - All safety tests pass.
 
+**Status (2026-10-11): exit gate met; see ADR 0004.** Observed live: one change set (Lattice
+Logistics, play `champion_departure`) approved in the UI reached every target — HubSpot task, note and
+deal next step (portal 247655945, read back and matched), Gmail draft (acadablelabs@gmail.com, never
+sent; Claude-worded, checked) and Slack DM (workspace owner) — one attempt each; audit chain 420/420.
+Morning digest tested with a fake Slack client only (live send held: 05:00 local time).
+
 ---
 
 ### Phase 5 — Prove it: back-test and evaluation suite
@@ -458,6 +464,11 @@ Every table has `org_id`. Timestamps are stored in UTC; day boundaries are compu
 **Exit gate**
 - A results table with n, confidence ranges and baselines, every number labelled.
 - If there are too few churns, use case-by-case replays instead of a headline number (blueprint fallback).
+
+**Status (2026-10-11): exit gate met; see ADR 0005 and [docs/RESULTS.md](RESULTS.md).** 197 past
+renewals labelled from deal history (34 lost revenue), 176 scored, held-out half has 16 losses
+(enough for a headline number with wide ranges). Every number carries n, a 95% range and a label
+(simulated). Back-test screen and per-account replay built; `make evals` runs every free suite.
 
 ---
 

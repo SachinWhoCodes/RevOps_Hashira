@@ -198,6 +198,7 @@ class ChangeSetStatus(enum.StrEnum):
     done = "done"
     failed = "failed"
     rejected = "rejected"
+    superseded = "superseded"
 
 
 class ChangeItemStatus(enum.StrEnum):
@@ -211,6 +212,8 @@ class ChangeItemStatus(enum.StrEnum):
     failed = "failed"
     conflict = "conflict"
     would_execute = "would_execute"
+    blocked = "blocked"  # stopped by a rule (e.g. money talk in an AI draft); never executable
+    superseded = "superseded"  # a newer proposal replaced it before anyone decided
 
 
 class Decision(enum.StrEnum):
@@ -521,6 +524,23 @@ class UsageDaily(Base):
     created_at: Mapped[datetime] = _created()
 
 
+class ExternalRef(Base):
+    """Where one of our records lives in an outside system (e.g. the HubSpot sandbox company created
+    for a synthetic account, or an owner's Slack user). Writers resolve targets through this; without a
+    row, the record's own CRM id is used."""
+
+    __tablename__ = "external_ref"
+    __table_args__ = (UniqueConstraint("org_id", "entity_type", "entity_id", "system"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = _org_fk()
+    entity_type: Mapped[str] = mapped_column(String(32))  # account | contact | deal | user
+    entity_id: Mapped[uuid.UUID]
+    system: Mapped[str] = mapped_column(String(32))  # hubspot | slack
+    external_id: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = _created()
+
+
 class IdentityOverride(Base):
     """A person's manual decision that an email, domain or usage key belongs to an account."""
 
@@ -636,6 +656,10 @@ class ChangeSet(Base):
     playbook_id: Mapped[str] = mapped_column(String(64))
     playbook_version: Mapped[str] = mapped_column(String(32))
     status: Mapped[ChangeSetStatus] = mapped_column(_enum(ChangeSetStatus), default=ChangeSetStatus.proposed)
+    # The assessment whose verified claims this plan was built from; a newer one supersedes the plan.
+    assessment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("assessment.id", ondelete="SET NULL"))
+    # Planner notes: play purpose, skipped actions and why, how the draft was written, AI cost.
+    notes: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
 

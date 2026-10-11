@@ -14,8 +14,10 @@ from casefile.ai.evidence import build_pack
 from casefile.ai.gateway import AiGateway
 from casefile.audit.log import append as audit
 from casefile.cases.service import Assessed, RecomputeContext, assess
+from casefile.config import get_settings
 from casefile.db.models import Account, AccountCase, AppUser, Assessment, AssessmentStatus, CaseStatus, Org
 from casefile.timeline.snapshot import AccountHistory, Snapshot
+from casefile.worker.jobs import enqueue
 
 
 def _points(assessed: Assessed) -> dict[str, int]:
@@ -93,6 +95,15 @@ def explain_assessment(
             account_id=account.id,
         )
     store(session, a, written)
+    if get_settings().auto_plan_cases:
+        for case_id in session.scalars(
+            select(AccountCase.id).where(
+                AccountCase.current_assessment_id == a.id, AccountCase.status == CaseStatus.open
+            )
+        ):
+            enqueue(
+                session, "plan_case", {"case_id": str(case_id)}, org_id=a.org_id, dedupe_key=f"plan:{case_id}"
+            )
     return written
 
 

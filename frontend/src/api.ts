@@ -222,7 +222,11 @@ export type AuditRow = {
   entity_id: string | null;
   details: Record<string, unknown>;
   evidence_count: number;
+  approval_id: string | null;
+  model: string | null;
+  prompt_version: string | null;
   hash: string;
+  prev_hash: string | null;
 };
 
 // ---------------------------------------------------------------- Phase 3: AI layer
@@ -269,4 +273,146 @@ export type AiUsage = {
   budget_usd_per_day: number;
   spent_today_usd: number;
   by_purpose: { purpose: string; model: string; calls: number; cost_usd: number; avg_cost_usd: number; failed: number }[];
+};
+
+// ---------------------------------------------------------------- Phase 4: change sets and approvals
+
+export type ItemStatus =
+  | "proposed" | "approved" | "edited_approved" | "rejected" | "queued" | "executing"
+  | "succeeded" | "failed" | "conflict" | "would_execute" | "blocked" | "superseded";
+
+export type ChangeItem = {
+  id: string;
+  seq: number;
+  action_type: "crm_task" | "crm_note" | "crm_next_step" | "gmail_draft" | "slack_dm" | "review_manually" | string;
+  label: string;
+  tier: number;
+  target_system: "hubspot" | "gmail" | "slack" | "casefile" | string;
+  target_ref: Record<string, unknown>;
+  before: Record<string, unknown>;
+  proposed: Record<string, unknown>;
+  final: Record<string, unknown> | null;
+  editable: string[];
+  field_update: boolean;
+  status: ItemStatus;
+  blocked_reason: string | null;
+  result: Record<string, unknown>;
+  why: { text: string; evidence: ClaimEvidence[] }[];
+  evidence_count: number;
+  payload_hash: string | null;
+  links: Record<string, string>;
+  approvals: { decision: "approve" | "reject"; by: string; edited: boolean; at: string; comment: string | null; hash: string; channel: string }[];
+  attempts: { no: number; status: string; started_at: string; finished_at: string | null; error: string | null; external_id: string | null }[];
+};
+
+export type ChangeSet = {
+  id: string;
+  case_id: string;
+  case_kind: "risk" | "expansion";
+  account: { id: string; name: string };
+  play: string;
+  playbook_version: string;
+  status: string;
+  assessment_id: string | null;
+  notes: { purpose?: string; skipped?: { type: string; reason: string }[]; draft_source?: string; draft_reasons?: string[]; draft_cost_usd?: number };
+  created_at: string;
+  can_decide: boolean;
+  items: ChangeItem[];
+};
+
+export type InboxRow = {
+  id: string;
+  case_id: string;
+  case_kind: "risk" | "expansion";
+  account: { id: string; name: string };
+  headline: string | null;
+  score: number | null;
+  play: string;
+  status: string;
+  counts: Partial<Record<ItemStatus, number>>;
+  created_at: string;
+};
+
+export type ExecutorStatus = {
+  running: boolean;
+  last_heartbeat: string | null;
+  shadow: boolean;
+  targets: { kind: string; name: string; config: Record<string, unknown>; writer_loaded: boolean }[];
+};
+
+// ---------------------------------------------------------------- Phase 5: back-test
+
+export type Metric = { value: number | null; ci95: [number, number] | null; n: number; [k: string]: unknown };
+
+export type HorizonBlock = {
+  n: number;
+  positives?: number;
+  prevalence?: number;
+  auc?: Metric;
+  precision?: Metric;
+  recall?: Metric;
+  precision_at_10?: Metric;
+  flag_at?: number;
+  best_single_signal?: { signal: string; auc: Metric; precision: Metric; recall: Metric };
+  health_score?: { auc: Metric } | string;
+  renewal_date_only?: { auc: Metric; note: string };
+};
+
+export type BacktestRunView = {
+  id: string;
+  started_at: string;
+  label: "observed" | "simulated" | "estimated" | "untested";
+  engine_version: string;
+  config: { excluded_signals: string[]; label_coverage: number; horizons: number[]; min_history_days: number };
+  metrics: {
+    outcomes: Record<string, number>;
+    positive_definition: string[];
+    events: { total: number; scored: number; tuning: number; held_out: number };
+    split_date: string;
+    skipped: Record<string, number>;
+    flag_threshold: { default: number; tuned_on_tuning_period: number; objective: string };
+    best_single_signal: { name: string | null; chosen_on: string };
+    horizon: Record<string, Record<"all" | "tuning_period" | "held_out" | "held_out_tuned_threshold", HorizonBlock>>;
+    rolling: { weeks: number; precision_at_10: Metric; baseline_nearest_renewal_first: Metric; baseline_best_single_signal: Metric };
+    lead_time: {
+      positives: number;
+      flagged_before_outcome: Metric;
+      median_lead_days: Metric;
+      share_flagged_30_days_ahead: Metric;
+      missed: { account_id: string; renewal_date: string; outcome: string }[];
+    };
+    false_alarms: { negatives: number; flagged_in_last_90_days: Metric };
+    headline_ok: boolean;
+    fallback: string | null;
+  };
+};
+
+export type OutcomeRow = {
+  id: string;
+  account: { id: string; name: string };
+  renewal_date: string;
+  outcome: "renewed" | "downgraded" | "churned" | "late";
+  positive: boolean;
+  label_source: "derived" | "human";
+  arr_before: number | null;
+  arr_after: number | null;
+  risk_before: Record<string, number>;
+  missed: boolean;
+};
+
+export type Replay = {
+  account: { id: string; name: string };
+  flag_at: number;
+  excluded_signals: string[];
+  points: { date: string; risk: number; opportunity: number; flagged: boolean; signals: string[] }[];
+  outcomes: { renewal_date: string; outcome: string; label_source: string }[];
+};
+
+export type ReplaySaid = {
+  as_of: string;
+  risk: number;
+  opportunity: number;
+  headline: string;
+  claims: Claim[];
+  source: string;
 };
