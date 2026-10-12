@@ -148,5 +148,4 @@ deploy/             production Docker Compose, Caddy, backups
 - [CLAUDE.md](CLAUDE.md) — the working manual and handoff notes for development sessions
 
 ## Team
-
-Sachin Verma · Krishna Dixit — built for the *Autonomous RevOps Agent* hackathon, October 2026.
+4 Code Hashira
